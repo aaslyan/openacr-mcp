@@ -73,7 +73,7 @@ The test suite includes unit tests (always run) and integration tests (require O
 | Tool | Description |
 |------|-------------|
 | `create_target` | Create a new namespace (ssimdb, exe, lib, protocol) |
-| `create_ctype` | Create a new ctype (auto-creates ssimfile for ssimdb) |
+| `create_ctype` | Create a new ctype (auto-creates ssimfile + cfmt for ssimdb) |
 | `create_field` | Add a field to a ctype |
 | `create_fconst` | Add an enum constant to a field |
 | `delete_record` | Delete ssim records by pattern |
@@ -94,6 +94,16 @@ The test suite includes unit tests (always run) and integration tests (require O
 | Tool | Description |
 |------|-------------|
 | `get_workflow_guide` | Detailed step-by-step examples for common workflows |
+| `get_usage_examples` | Generate C++ usage examples for a namespace's types |
+
+## What `create_ctype` Auto-Creates
+
+For ssimdb namespaces, `create_ctype` automatically inserts:
+
+- **`dmmeta.ssimfile`** — backing ssimfile for data storage
+- **`dmmeta.cfmt`** with `read:Y print:Y` — generates `ReadStrptrMaybe`/`Print` functions needed by finput to load data into exe targets
+
+No manual wiring needed.
 
 ## Typical Workflow
 
@@ -105,6 +115,7 @@ The test suite includes unit tests (always run) and integration tests (require O
 5. create_field("mydb.Record", "status", "mydb.Status", "Pkey")  -- add FK field
 6. run_amc()                              -- generate C++
 7. get_functions("mydb")                  -- discover generated API
+8. get_usage_examples("mydb")            -- C++ code examples for each type
 ```
 
 ## Architecture
@@ -114,13 +125,13 @@ openacr-mcp/
 ├── openacr_mcp/
 │   ├── __init__.py
 │   ├── __main__.py
-│   ├── server.py          # MCP server — 18 tools + embedded workflow knowledge
+│   ├── server.py          # MCP server — 20 tools + embedded workflow knowledge
 │   ├── acr_client.py      # Subprocess wrapper for acr/acr_ed/amc/abt
 │   └── header_parser.py   # C++ header parser for generated code discovery
 ├── tests/
-│   ├── test_server.py     # 32 tests (unit + integration)
+│   ├── test_server.py     # 41 tests (unit + integration)
 │   ├── test_acr_client.py # 20 tests
-│   └── test_header_parser.py # 19 tests
+│   └── test_header_parser.py # 17 tests
 ├── .mcp.json.example      # Template MCP config (copy to .mcp.json)
 └── pyproject.toml
 ```
