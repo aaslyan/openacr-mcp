@@ -22,6 +22,7 @@ import json
 import os
 import re
 import shutil
+import subprocess
 import sys
 from pathlib import Path
 from typing import Any
@@ -170,7 +171,7 @@ Use standalone project directories to keep schema work isolated from the
 upstream OpenACR installation.  All reads/writes stay local to the project.
 
 - `init_project("/path/to/project")` — bootstrap a new project directory
-  (copies data/, symlinks bin/, creates lock/, include/gen/, cpp/gen/)
+  (copies data/, symlinks bin/, creates scaffold dirs, initializes git)
 - `set_project("/path/to/project")` — switch the working context to a project
 - `set_project("")` — switch back to the upstream openacr directory
 
@@ -209,6 +210,14 @@ def init_project(path: str) -> str:
     os.symlink(client.openacr_dir / "bin", project / "bin")
     for sub in ("lock", "include/gen", "cpp/gen"):
         (project / sub).mkdir(parents=True, exist_ok=True)
+
+    # acr_ed requires a git repository
+    subprocess.run(["git", "init"], cwd=str(project), capture_output=True)
+    subprocess.run(["git", "add", "."], cwd=str(project), capture_output=True)
+    subprocess.run(
+        ["git", "commit", "-m", "init project", "--allow-empty"],
+        cwd=str(project), capture_output=True,
+    )
 
     return _json({"ok": True, "project_dir": str(project)})
 

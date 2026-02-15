@@ -1511,6 +1511,7 @@ class TestInitProject:
         assert (p / "lock").is_dir()
         assert (p / "include" / "gen").is_dir()
         assert (p / "cpp" / "gen").is_dir()
+        assert (p / ".git").is_dir()  # acr_ed requires git
 
     def test_data_is_copy_not_symlink(self):
         srv.init_project(self.project_dir)
