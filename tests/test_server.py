@@ -579,6 +579,297 @@ class TestValidateSchema:
         assert "error" in result
 
 
+class TestListFconsts:
+    """Unit tests for list_fconsts tool."""
+
+    @pytest.fixture(autouse=True)
+    def setup_mock_client(self):
+        mock_client = MagicMock(spec=AcrClient)
+        srv._client = mock_client
+        self.mock_client = mock_client
+        yield
+        srv._client = None
+
+    def test_namespace_query(self):
+        self.mock_client.acr.return_value = AcrResult(ok=True, records=[
+            {"_type": "dmmeta.fconst", "fconst": "dev.Mdmark.mdmark/CMD", "value": "CMD"},
+        ])
+        result = json.loads(srv.list_fconsts("dev"))
+        assert result["ok"] is True
+        assert result["count"] == 1
+        self.mock_client.acr.assert_called_once_with("dmmeta.fconst:dev.%")
+
+    def test_ctype_query(self):
+        self.mock_client.acr.return_value = AcrResult(ok=True, records=[])
+        srv.list_fconsts("dev", ctype="dev.Mdmark")
+        self.mock_client.acr.assert_called_once_with("dmmeta.fconst:dev.Mdmark.%")
+
+    def test_no_client(self):
+        srv._client = None
+        result = json.loads(srv.list_fconsts("dev"))
+        assert "error" in result
+
+
+class TestListSsimfiles:
+    """Unit tests for list_ssimfiles tool."""
+
+    @pytest.fixture(autouse=True)
+    def setup_mock_client(self):
+        mock_client = MagicMock(spec=AcrClient)
+        srv._client = mock_client
+        self.mock_client = mock_client
+        yield
+        srv._client = None
+
+    def test_queries_namespace(self):
+        self.mock_client.acr.return_value = AcrResult(ok=True, records=[
+            {"_type": "dmmeta.ssimfile", "ssimfile": "dev.target"},
+        ])
+        result = json.loads(srv.list_ssimfiles("dev"))
+        assert result["ok"] is True
+        self.mock_client.acr.assert_called_once_with("dmmeta.ssimfile:dev.%")
+
+    def test_no_client(self):
+        srv._client = None
+        result = json.loads(srv.list_ssimfiles("dev"))
+        assert "error" in result
+
+
+class TestListFinputs:
+    """Unit tests for list_finputs tool."""
+
+    @pytest.fixture(autouse=True)
+    def setup_mock_client(self):
+        mock_client = MagicMock(spec=AcrClient)
+        srv._client = mock_client
+        self.mock_client = mock_client
+        yield
+        srv._client = None
+
+    def test_queries_target(self):
+        self.mock_client.acr.return_value = AcrResult(ok=True, records=[
+            {"_type": "dmmeta.finput", "field": "acr.FDb.ctype"},
+        ])
+        result = json.loads(srv.list_finputs("acr"))
+        assert result["ok"] is True
+        self.mock_client.acr.assert_called_once_with("dmmeta.finput:acr.%")
+
+    def test_no_client(self):
+        srv._client = None
+        result = json.loads(srv.list_finputs("acr"))
+        assert "error" in result
+
+
+class TestGetDownstream:
+    """Unit tests for get_downstream tool."""
+
+    @pytest.fixture(autouse=True)
+    def setup_mock_client(self):
+        mock_client = MagicMock(spec=AcrClient)
+        srv._client = mock_client
+        self.mock_client = mock_client
+        yield
+        srv._client = None
+
+    def test_default_level(self):
+        self.mock_client.acr_ndown.return_value = AcrResult(ok=True, records=[
+            {"_type": "dmmeta.ctype", "ctype": "dev.Builddir"},
+            {"_type": "dmmeta.field", "field": "dev.Builddir.builddir"},
+        ])
+        result = json.loads(srv.get_downstream("dmmeta.ctype:dev.Builddir"))
+        assert result["ok"] is True
+        assert result["count"] == 2
+        self.mock_client.acr_ndown.assert_called_once_with("dmmeta.ctype:dev.Builddir", 1)
+
+    def test_custom_levels(self):
+        self.mock_client.acr_ndown.return_value = AcrResult(ok=True, records=[])
+        srv.get_downstream("dmmeta.ctype:dev.Builddir", levels=3)
+        self.mock_client.acr_ndown.assert_called_once_with("dmmeta.ctype:dev.Builddir", 3)
+
+    def test_clamps_levels(self):
+        self.mock_client.acr_ndown.return_value = AcrResult(ok=True, records=[])
+        srv.get_downstream("dmmeta.ctype:dev.Builddir", levels=999)
+        self.mock_client.acr_ndown.assert_called_once_with("dmmeta.ctype:dev.Builddir", 100)
+
+    def test_no_client(self):
+        srv._client = None
+        result = json.loads(srv.get_downstream("dmmeta.ctype:dev.Builddir"))
+        assert "error" in result
+
+
+class TestGetUpstream:
+    """Unit tests for get_upstream tool."""
+
+    @pytest.fixture(autouse=True)
+    def setup_mock_client(self):
+        mock_client = MagicMock(spec=AcrClient)
+        srv._client = mock_client
+        self.mock_client = mock_client
+        yield
+        srv._client = None
+
+    def test_default_level(self):
+        self.mock_client.acr_nup.return_value = AcrResult(ok=True, records=[
+            {"_type": "dmmeta.ns", "ns": "dev"},
+            {"_type": "dmmeta.ctype", "ctype": "dev.Builddir"},
+        ])
+        result = json.loads(srv.get_upstream("dmmeta.ctype:dev.Builddir"))
+        assert result["ok"] is True
+        assert result["count"] == 2
+        self.mock_client.acr_nup.assert_called_once_with("dmmeta.ctype:dev.Builddir", 1)
+
+    def test_custom_levels(self):
+        self.mock_client.acr_nup.return_value = AcrResult(ok=True, records=[])
+        srv.get_upstream("dmmeta.field:dev.Builddir.builddir", levels=2)
+        self.mock_client.acr_nup.assert_called_once_with("dmmeta.field:dev.Builddir.builddir", 2)
+
+    def test_no_client(self):
+        srv._client = None
+        result = json.loads(srv.get_upstream("dmmeta.ctype:dev.Builddir"))
+        assert "error" in result
+
+
+class TestDeleteCtype:
+    """Unit tests for delete_ctype tool."""
+
+    @pytest.fixture(autouse=True)
+    def setup_mock_client(self):
+        mock_client = MagicMock(spec=AcrClient)
+        srv._client = mock_client
+        self.mock_client = mock_client
+        yield
+        srv._client = None
+
+    def test_calls_acr_ed_delete_ctype(self):
+        self.mock_client.acr_ed_delete_ctype.return_value = AcrResult(ok=True)
+        result = json.loads(srv.delete_ctype("myns.MyStruct"))
+        assert result["ok"] is True
+        self.mock_client.acr_ed_delete_ctype.assert_called_once_with("myns.MyStruct")
+
+    def test_propagates_error(self):
+        self.mock_client.acr_ed_delete_ctype.return_value = AcrResult(
+            ok=False, stderr="ctype not found", returncode=1
+        )
+        result = json.loads(srv.delete_ctype("bad.Type"))
+        assert result["ok"] is False
+
+    def test_no_client(self):
+        srv._client = None
+        result = json.loads(srv.delete_ctype("myns.X"))
+        assert "error" in result
+
+
+class TestDeleteField:
+    """Unit tests for delete_field tool."""
+
+    @pytest.fixture(autouse=True)
+    def setup_mock_client(self):
+        mock_client = MagicMock(spec=AcrClient)
+        srv._client = mock_client
+        self.mock_client = mock_client
+        yield
+        srv._client = None
+
+    def test_calls_acr_ed_delete_field(self):
+        self.mock_client.acr_ed_delete_field.return_value = AcrResult(ok=True)
+        result = json.loads(srv.delete_field("myns.MyStruct.my_field"))
+        assert result["ok"] is True
+        self.mock_client.acr_ed_delete_field.assert_called_once_with("myns.MyStruct.my_field")
+
+    def test_propagates_error(self):
+        self.mock_client.acr_ed_delete_field.return_value = AcrResult(
+            ok=False, stderr="field not found", returncode=1
+        )
+        result = json.loads(srv.delete_field("bad.Type.field"))
+        assert result["ok"] is False
+
+
+class TestDeleteTarget:
+    """Unit tests for delete_target tool."""
+
+    @pytest.fixture(autouse=True)
+    def setup_mock_client(self):
+        mock_client = MagicMock(spec=AcrClient)
+        srv._client = mock_client
+        self.mock_client = mock_client
+        yield
+        srv._client = None
+
+    def test_calls_acr_ed_delete_target(self):
+        self.mock_client.acr_ed_delete_target.return_value = AcrResult(ok=True)
+        result = json.loads(srv.delete_target("myns"))
+        assert result["ok"] is True
+        self.mock_client.acr_ed_delete_target.assert_called_once_with("myns")
+
+    def test_propagates_error(self):
+        self.mock_client.acr_ed_delete_target.return_value = AcrResult(
+            ok=False, stderr="target not found", returncode=1
+        )
+        result = json.loads(srv.delete_target("badns"))
+        assert result["ok"] is False
+
+
+class TestCreateSrcfile:
+    """Unit tests for create_srcfile tool."""
+
+    @pytest.fixture(autouse=True)
+    def setup_mock_client(self):
+        mock_client = MagicMock(spec=AcrClient)
+        srv._client = mock_client
+        self.mock_client = mock_client
+        yield
+        srv._client = None
+
+    def test_calls_acr_ed_create_srcfile(self):
+        self.mock_client.acr_ed_create_srcfile.return_value = AcrResult(ok=True)
+        result = json.loads(srv.create_srcfile("myapp", "cpp/myapp/main.cpp"))
+        assert result["ok"] is True
+        self.mock_client.acr_ed_create_srcfile.assert_called_once_with(
+            "cpp/myapp/main.cpp", "myapp"
+        )
+
+    def test_propagates_error(self):
+        self.mock_client.acr_ed_create_srcfile.return_value = AcrResult(
+            ok=False, stderr="target not found", returncode=1
+        )
+        result = json.loads(srv.create_srcfile("bad", "cpp/bad/x.cpp"))
+        assert result["ok"] is False
+
+
+class TestCreateUnittest:
+    """Unit tests for create_unittest tool."""
+
+    @pytest.fixture(autouse=True)
+    def setup_mock_client(self):
+        mock_client = MagicMock(spec=AcrClient)
+        srv._client = mock_client
+        self.mock_client = mock_client
+        yield
+        srv._client = None
+
+    def test_calls_acr_ed_create_unittest(self):
+        self.mock_client.acr_ed_create_unittest.return_value = AcrResult(ok=True)
+        result = json.loads(srv.create_unittest("atf_ut", "TestAdd", "Test addition"))
+        assert result["ok"] is True
+        self.mock_client.acr_ed_create_unittest.assert_called_once_with(
+            "atf_ut.TestAdd", "Test addition"
+        )
+
+    def test_propagates_error(self):
+        self.mock_client.acr_ed_create_unittest.return_value = AcrResult(
+            ok=False, stderr="target not found", returncode=1
+        )
+        result = json.loads(srv.create_unittest("bad", "TestX"))
+        assert result["ok"] is False
+
+    def test_no_comment(self):
+        self.mock_client.acr_ed_create_unittest.return_value = AcrResult(ok=True)
+        srv.create_unittest("atf_ut", "TestSomething")
+        self.mock_client.acr_ed_create_unittest.assert_called_once_with(
+            "atf_ut.TestSomething", ""
+        )
+
+
 @skip_no_openacr
 class TestGetUsageExamples:
     """Integration tests for get_usage_examples tool."""

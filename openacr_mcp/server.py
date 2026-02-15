@@ -77,7 +77,7 @@ hash tables, linked lists, and other data structures — all from the relational
 
 ## Typical Workflow
 
-1. **Query** existing schemas: `list_namespaces`, `list_ctypes`, `list_fields`, `query`, `search`
+1. **Query** existing schemas: `list_namespaces`, `list_ctypes`, `list_fields`, `list_fconsts`, `list_ssimfiles`, `list_finputs`, `query`, `search`
 2. **Author** new schemas: `create_target` → `create_ctype` → `create_field` → `create_fconst`
 3. **Generate** C++ code: `run_amc`
 4. **Build**: `run_abt`
@@ -128,6 +128,24 @@ To create an enum:
 - **Composite keys**: Use `create_substr_field` with `.LL` / `.LR` pathcomp expressions
 - **Bitfields**: Use `create_bitfield` to pack small values into integers
 - **Indexed access**: Use `create_field` with `xref=True`, `hashfld`, `sortfld`, `via`
+
+## Schema Exploration
+
+- `list_fconsts` — list enum constants for a namespace or ctype
+- `list_ssimfiles` — list data tables in a namespace
+- `list_finputs` — list runtime tables an exe loads
+- `get_upstream` / `get_downstream` — traverse FK dependency graph (acr -nup / -ndown)
+
+## Structured Deletion
+
+- `delete_ctype` — delete a ctype with full cascade (fields, ssimfile, cfmt, etc.)
+- `delete_field` — delete a field with cascade (fconsts, xrefs, etc.)
+- `delete_target` — delete an entire namespace with cascade
+
+## Scaffolding
+
+- `create_srcfile` — create a source file registered with a build target
+- `create_unittest` — scaffold a unit test function
 
 ## Validation
 
@@ -289,6 +307,111 @@ def search(text: str) -> str:
     results["field_count"] = len(results["fields"])
 
     return _json(results)
+
+
+@server.tool()
+def list_fconsts(namespace: str, ctype: str = "") -> str:
+    """List enum constants (fconsts) in a namespace or for a specific ctype.
+
+    Args:
+        namespace: Namespace to search (e.g., "dev", "mydb")
+        ctype: Optional ctype to filter by (e.g., "dev.Mdmark"). If omitted, lists all fconsts in the namespace.
+
+    Returns:
+        JSON list of fconst records with fconst, value, and comment.
+    """
+    client = _client_or_error()
+    if isinstance(client, str):
+        return client
+    if ctype:
+        pattern = f"dmmeta.fconst:{ctype}.%"
+    else:
+        pattern = f"dmmeta.fconst:{namespace}.%"
+    result = client.acr(pattern)
+    return _json(result.to_dict())
+
+
+@server.tool()
+def list_ssimfiles(namespace: str) -> str:
+    """List all ssimfiles (data tables) in a namespace.
+
+    Each ssimfile is a flat file in data/<ns>/<table>.ssim that stores
+    records for one ctype. This tells you what persistent tables exist.
+
+    Args:
+        namespace: Namespace to query (e.g., "dev", "dmmeta")
+
+    Returns:
+        JSON list of ssimfile records with ssimfile and ctype.
+    """
+    client = _client_or_error()
+    if isinstance(client, str):
+        return client
+    result = client.acr(f"dmmeta.ssimfile:{namespace}.%")
+    return _json(result.to_dict())
+
+
+@server.tool()
+def list_finputs(target: str) -> str:
+    """List all runtime table inputs (finputs) for an exe target.
+
+    Shows which ssimfiles an executable loads into memory at startup.
+
+    Args:
+        target: Target namespace (e.g., "acr", "amc", "myapp")
+
+    Returns:
+        JSON list of finput records showing which ssimfiles the target reads.
+    """
+    client = _client_or_error()
+    if isinstance(client, str):
+        return client
+    result = client.acr(f"dmmeta.finput:{target}.%")
+    return _json(result.to_dict())
+
+
+@server.tool()
+def get_downstream(pattern: str, levels: int = 1) -> str:
+    """Get downstream dependencies — records that depend on the matched records.
+
+    Uses ``acr -ndown`` to traverse foreign key references downward.
+    For example, querying a ctype with ndown=1 shows its fields.
+
+    Args:
+        pattern: ACR query pattern (e.g., "dmmeta.ctype:dev.Builddir")
+        levels: Number of levels to traverse down (1-100, default 1)
+
+    Returns:
+        JSON list of matched records plus their downstream dependents.
+    """
+    client = _client_or_error()
+    if isinstance(client, str):
+        return client
+    levels = max(1, min(100, levels))
+    result = client.acr_ndown(pattern, levels)
+    return _json(result.to_dict())
+
+
+@server.tool()
+def get_upstream(pattern: str, levels: int = 1) -> str:
+    """Get upstream references — records that the matched records depend on.
+
+    Uses ``acr -nup`` to traverse foreign key references upward.
+    For example, querying a field with nup=1 shows its parent ctype and arg type.
+
+    Args:
+        pattern: ACR query pattern (e.g., "dmmeta.field:dev.Builddir.builddir")
+        levels: Number of levels to traverse up (1-100, default 1)
+
+    Returns:
+        JSON list of matched records plus their upstream dependencies.
+    """
+    client = _client_or_error()
+    if isinstance(client, str):
+        return client
+    levels = max(1, min(100, levels))
+    result = client.acr_nup(pattern, levels)
+    return _json(result.to_dict())
 
 
 # ===== Group 2: Schema Authoring (wrap acr_ed) ============================
@@ -673,6 +796,111 @@ def validate_schema(pattern: str = "%") -> str:
     })
 
 
+@server.tool()
+def delete_ctype(ctype: str) -> str:
+    """Delete a ctype and all its associated records (fields, ssimfile, cfmt, etc.).
+
+    Uses ``acr_ed -del -ctype`` which properly cascades the deletion to all
+    dependent records — much safer than raw ``delete_record``.
+
+    Args:
+        ctype: Ctype to delete (e.g., "myns.MyStruct")
+
+    Returns:
+        JSON with success status or error.
+    """
+    client = _client_or_error()
+    if isinstance(client, str):
+        return client
+    result = client.acr_ed_delete_ctype(ctype)
+    return _json(result.to_dict())
+
+
+@server.tool()
+def delete_field(field: str) -> str:
+    """Delete a field and its associated records (fconsts, xrefs, etc.).
+
+    Uses ``acr_ed -del -field`` which properly cascades.
+
+    Args:
+        field: Field to delete (e.g., "myns.MyStruct.my_field")
+
+    Returns:
+        JSON with success status or error.
+    """
+    client = _client_or_error()
+    if isinstance(client, str):
+        return client
+    result = client.acr_ed_delete_field(field)
+    return _json(result.to_dict())
+
+
+@server.tool()
+def delete_target(target: str) -> str:
+    """Delete a target (namespace) and all its associated records.
+
+    Uses ``acr_ed -del -target`` which cascades the deletion to all ctypes,
+    fields, ssimfiles, finputs, source files, and build configuration.
+    This is a destructive operation.
+
+    Args:
+        target: Target namespace to delete (e.g., "myns")
+
+    Returns:
+        JSON with success status or error.
+    """
+    client = _client_or_error()
+    if isinstance(client, str):
+        return client
+    result = client.acr_ed_delete_target(target)
+    return _json(result.to_dict())
+
+
+@server.tool()
+def create_srcfile(target: str, path: str, comment: str = "") -> str:
+    """Create a new source file and register it with a build target.
+
+    The file is created on disk and a ``dev.targsrc`` record is inserted
+    so ``abt`` knows to compile it.
+
+    Args:
+        target: Build target that owns the file (e.g., "myapp")
+        path: Source file path relative to openacr dir (e.g., "cpp/myapp/main.cpp")
+        comment: Description of the file
+
+    Returns:
+        JSON with success status or error.
+    """
+    client = _client_or_error()
+    if isinstance(client, str):
+        return client
+    result = client.acr_ed_create_srcfile(path, target)
+    return _json(result.to_dict())
+
+
+@server.tool()
+def create_unittest(target: str, funcname: str, comment: str = "") -> str:
+    """Create a unit test function scaffold.
+
+    Creates a test function in the target's test source file. The test name
+    is ``<target>.<funcname>`` (e.g., "myapp.TestSomething").
+
+    Args:
+        target: Target namespace (e.g., "myapp")
+        funcname: Test function name (e.g., "TestSomething")
+        comment: Description of the test
+
+    Returns:
+        JSON with success status or error.
+    """
+    client = _client_or_error()
+    if isinstance(client, str):
+        return client
+    test_name = f"{target}.{funcname}"
+    result = client.acr_ed_create_unittest(test_name, comment)
+    return _json(result.to_dict())
+
+
 # ===== Group 3: Code Generation & Discovery ===============================
 
 @server.tool()
@@ -946,6 +1174,37 @@ def get_workflow_guide() -> str:
                     "   validate_schema('dmmeta.ctype:myns.%') — check one namespace",
                     "2. Common errors: broken FK refs, missing ssimfiles, dangling records",
                     "3. Fix any errors before running amc",
+                ],
+            },
+            {
+                "title": "Explore an existing namespace",
+                "steps": [
+                    "1. list_ssimfiles('dev') — see all data tables",
+                    "2. list_fconsts('dev') — see all enum constants",
+                    "3. list_finputs('acr') — see what tables acr loads at runtime",
+                    "4. get_downstream('dmmeta.ctype:dev.Builddir', levels=2) — see fields and fconsts",
+                    "5. get_upstream('dmmeta.field:dev.Builddir.builddir', levels=1) — see parent ctype",
+                ],
+            },
+            {
+                "title": "Delete and rebuild a ctype",
+                "steps": [
+                    "1. delete_ctype('myns.OldType') — cascades to fields, ssimfile, cfmt",
+                    "2. Or delete just a field: delete_field('myns.MyType.old_field')",
+                    "3. Or remove an entire namespace: delete_target('myns')",
+                    "4. run_amc() — regenerate code after deletion",
+                    "Note: Use delete_ctype/field/target instead of raw delete_record",
+                    "      — they handle cascade properly via acr_ed.",
+                ],
+            },
+            {
+                "title": "Scaffold source files and tests",
+                "steps": [
+                    "1. create_srcfile(target='myapp', path='cpp/myapp/utils.cpp')",
+                    "   — Creates the file and registers it with abt",
+                    "2. create_unittest(target='atf_ut', funcname='myapp.TestAdd')",
+                    "   — Scaffolds a test function in the target's test source",
+                    "3. run_abt(target='myapp') — build to verify",
                 ],
             },
         ],

@@ -241,11 +241,60 @@ class AcrClient:
         cmd = ["abt", target]
         return self._run(cmd, timeout=300)
 
+    # -- acr graph traversal -----------------------------------------------
+
+    def acr_ndown(self, pattern: str, ndown: int = 1) -> AcrResult:
+        """Run ``acr '<pattern>' -ndown <N>`` for downstream dependencies."""
+        cmd = ["acr", pattern, "-ndown", str(ndown)]
+        return self._run(cmd, timeout=60)
+
+    def acr_nup(self, pattern: str, nup: int = 1) -> AcrResult:
+        """Run ``acr '<pattern>' -nup <N>`` for upstream references."""
+        cmd = ["acr", pattern, "-nup", str(nup)]
+        return self._run(cmd, timeout=60)
+
+    def acr_unused(self, pattern: str) -> AcrResult:
+        """Run ``acr '<pattern>' -unused`` to find unreferenced records."""
+        cmd = ["acr", pattern, "-unused"]
+        return self._run(cmd, timeout=60)
+
     # -- acr check ---------------------------------------------------------
 
     def acr_check(self, pattern: str = "%") -> AcrResult:
         """Run ``acr '<pattern>' -check`` for referential integrity validation."""
         cmd = ["acr", pattern, "-check"]
+        return self._run(cmd, timeout=60)
+
+    # -- acr_ed structured delete ------------------------------------------
+
+    def acr_ed_delete_ctype(self, ctype: str) -> AcrResult:
+        """Run ``acr_ed -del -ctype <ctype> -write`` (cascades fields, ssimfile, etc.)."""
+        cmd = ["acr_ed", "-del", "-ctype", ctype, "-write"]
+        return self._run(cmd, timeout=60)
+
+    def acr_ed_delete_field(self, field: str) -> AcrResult:
+        """Run ``acr_ed -del -field <field> -write``."""
+        cmd = ["acr_ed", "-del", "-field", field, "-write"]
+        return self._run(cmd, timeout=60)
+
+    def acr_ed_delete_target(self, target: str) -> AcrResult:
+        """Run ``acr_ed -del -target <target> -write`` (cascades everything)."""
+        cmd = ["acr_ed", "-del", "-target", target, "-write"]
+        return self._run(cmd, timeout=60)
+
+    # -- acr_ed scaffolding ------------------------------------------------
+
+    def acr_ed_create_srcfile(self, path: str, target: str) -> AcrResult:
+        """Run ``acr_ed -create -srcfile <path> -target <target> -write``."""
+        cmd = ["acr_ed", "-create", "-srcfile", path, "-target", target, "-write"]
+        return self._run(cmd, timeout=60)
+
+    def acr_ed_create_unittest(self, test_name: str, comment: str = "") -> AcrResult:
+        """Run ``acr_ed -create -unittest <ns.func> -write``."""
+        cmd = ["acr_ed", "-create", "-unittest", test_name]
+        if comment:
+            cmd.extend(["-comment", comment])
+        cmd.append("-write")
         return self._run(cmd, timeout=60)
 
     # -- convenience -------------------------------------------------------
