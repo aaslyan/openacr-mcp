@@ -103,19 +103,23 @@ class AcrResult:
 # ---------------------------------------------------------------------------
 
 class AcrClient:
-    """Subprocess wrapper for OpenACR CLI tools."""
+    """Subprocess wrapper for OpenACR CLI tools.
+
+    On init, adds {openacr_dir}/bin to os.environ["PATH"] so all
+    subprocesses (and their children) can find OpenACR commands by name.
+    """
 
     def __init__(self, openacr_dir: str | Path):
         self.openacr_dir = Path(openacr_dir).resolve()
         self.bin_dir = self.openacr_dir / "bin"
         if not self.bin_dir.exists():
             raise FileNotFoundError(f"OpenACR bin dir not found: {self.bin_dir}")
-
-    def _env(self) -> dict[str, str]:
-        """Build environment with openacr/bin on PATH."""
-        env = os.environ.copy()
-        env["PATH"] = f"{self.bin_dir}:{env.get('PATH', '')}"
-        return env
+        # Export bin dir into process PATH so all subprocesses inherit it.
+        # This is critical: acr_ed spawns sub-commands (acr_in, amc_vis, acr)
+        # that must be findable by name on PATH.
+        bin_str = str(self.bin_dir)
+        if bin_str not in os.environ.get("PATH", ""):
+            os.environ["PATH"] = f"{bin_str}:{os.environ.get('PATH', '')}"
 
     def _run(self, args: list[str], *, timeout: int = 30) -> AcrResult:
         """Run a command and return an AcrResult."""
@@ -123,7 +127,6 @@ class AcrClient:
             proc = subprocess.run(
                 args,
                 cwd=str(self.openacr_dir),
-                env=self._env(),
                 capture_output=True,
                 text=True,
                 timeout=timeout,
@@ -157,10 +160,9 @@ class AcrClient:
         """Insert a raw ssim record via ``acr -insert -write``."""
         try:
             proc = subprocess.run(
-                [str(self.bin_dir / "acr"), "-insert", "-write"],
+                ["acr", "-insert", "-write"],
                 input=line + "\n",
                 cwd=str(self.openacr_dir),
-                env=self._env(),
                 capture_output=True,
                 text=True,
                 timeout=30,
@@ -175,7 +177,7 @@ class AcrClient:
                 result.records = parse_ssim_output(proc.stdout)
             return result
         except FileNotFoundError:
-            return AcrResult(ok=False, stderr=f"Command not found: acr", returncode=-1)
+            return AcrResult(ok=False, stderr="Command not found: acr", returncode=-1)
         except subprocess.TimeoutExpired:
             return AcrResult(ok=False, stderr="Command timed out after 30s", returncode=-1)
 
@@ -183,28 +185,23 @@ class AcrClient:
 
     def acr(self, pattern: str, *, tree: bool = False) -> AcrResult:
         """Run ``acr '<pattern>'`` and parse ssim output."""
-        cmd = [str(self.bin_dir / "acr"), pattern]
+        cmd = ["acr", pattern]
         if tree:
             cmd.append("-t")
         return self._run(cmd)
 
     def acr_raw(self, pattern: str, *, tree: bool = False) -> AcrResult:
         """Run acr and return raw stdout (useful for -t tree output)."""
-        cmd = [str(self.bin_dir / "acr"), pattern]
+        cmd = ["acr", pattern]
         if tree:
             cmd.append("-t")
-        result = self._run(cmd)
-        # For tree mode, keep raw stdout rather than parsed records
-        return result
+        return self._run(cmd)
 
     # -- acr_ed operations -------------------------------------------------
 
     def acr_ed_create(self, args: list[str]) -> AcrResult:
-        """Run ``acr_ed -create <args> -write``.
-
-        acr_ed -create outputs a shell script. We capture it and pipe to bash.
-        """
-        cmd = [str(self.bin_dir / "acr_ed"), "-create"] + args + ["-write"]
+        """Run ``acr_ed -create <args> -write``."""
+        cmd = ["acr_ed", "-create"] + args + ["-write"]
         return self._run(cmd, timeout=60)
 
     def acr_ed_create_target(self, name: str, nstype: str, comment: str = "") -> AcrResult:
@@ -212,27 +209,27 @@ class AcrClient:
 
         Creates a new namespace/target (e.g. ssimdb, exe, lib).
         """
-        cmd = [str(self.bin_dir / "acr_ed"), "-create", "-target", name, "-nstype", nstype]
+        cmd = ["acr_ed", "-create", "-target", name, "-nstype", nstype]
         if comment:
             cmd.extend(["-comment", comment])
         cmd.append("-write")
         return self._run(cmd, timeout=60)
 
     def acr_ed_delete(self, pattern: str) -> AcrResult:
-        """Run ``acr_ed -del -target <pattern> -write``."""
-        cmd = [str(self.bin_dir / "acr"), "-del", "-write", pattern]
+        """Run ``acr -del -write <pattern>``."""
+        cmd = ["acr", "-del", "-write", pattern]
         return self._run(cmd, timeout=30)
 
     def acr_ed_rename(self, old: str, new: str) -> AcrResult:
         """Run ``acr_ed -rename <old> <new> -write``."""
-        cmd = [str(self.bin_dir / "acr_ed"), "-rename", old, new, "-write"]
+        cmd = ["acr_ed", "-rename", old, new, "-write"]
         return self._run(cmd, timeout=60)
 
     # -- amc ---------------------------------------------------------------
 
     def amc(self, namespace: str = "") -> AcrResult:
         """Run ``amc [namespace]`` to generate C++ code."""
-        cmd = [str(self.bin_dir / "amc")]
+        cmd = ["amc"]
         if namespace:
             cmd.append(namespace)
         return self._run(cmd, timeout=120)
@@ -241,7 +238,7 @@ class AcrClient:
 
     def abt(self, target: str) -> AcrResult:
         """Run ``abt <target>`` to build."""
-        cmd = [str(self.bin_dir / "abt"), target]
+        cmd = ["abt", target]
         return self._run(cmd, timeout=300)
 
     # -- convenience -------------------------------------------------------

@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import sys
 from pathlib import Path
@@ -691,9 +692,13 @@ def main():
         print(f"Error: OpenACR dir not found: {args.openacr_dir}", file=sys.stderr)
         sys.exit(1)
 
+    # Set cwd to openacr dir — this is the standard OpenACR working mode.
+    # AcrClient.__init__ adds bin/ to PATH so all commands are findable by name.
+    os.chdir(args.openacr_dir)
+
     global _client
     _client = AcrClient(args.openacr_dir)
-    print(f"OpenACR MCP server initialized: {args.openacr_dir}", file=sys.stderr)
+    print(f"OpenACR MCP server initialized: {args.openacr_dir} (cwd + PATH set)", file=sys.stderr)
 
     server.run("stdio")
 
