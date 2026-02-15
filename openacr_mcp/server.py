@@ -671,6 +671,215 @@ def get_workflow_guide() -> str:
     return _json(guide)
 
 
+# ===== Group 5: Usage Examples =============================================
+
+@server.tool()
+def get_usage_examples(namespace: str) -> str:
+    """Generate C++ usage examples for a namespace's generated types.
+
+    Inspects the actual generated structs, enums, and fields, then produces
+    concrete C++ code showing how to use them: initialization, field access,
+    enum operations, serialization.
+
+    Args:
+        namespace: The namespace (e.g., "reservedb", "bookdb")
+
+    Returns:
+        JSON with include directive, and per-type usage examples.
+    """
+    client = _client_or_error()
+    if isinstance(client, str):
+        return client
+
+    # Gather schema info
+    ctypes_result = client.list_ctypes(namespace)
+    if not ctypes_result.ok or not ctypes_result.records:
+        return _error(f"No ctypes found for namespace '{namespace}'")
+
+    examples: dict[str, Any] = {
+        "namespace": namespace,
+        "include": f'#include "include/gen/{namespace}_gen.h"',
+        "types": [],
+    }
+
+    for ctype_rec in ctypes_result.records:
+        ctype_name = ctype_rec.get("ctype", "")  # e.g. "reservedb.Guest"
+        comment = ctype_rec.get("comment", "")
+        if "." not in ctype_name:
+            continue
+        ns, type_name = ctype_name.split(".", 1)
+
+        # Skip internal helper types
+        if type_name in ("FieldId",) or type_name.endswith("Case"):
+            continue
+
+        # Get fields
+        fields_result = client.list_fields(ctype_name)
+        fields = fields_result.records if fields_result.ok else []
+
+        # Check for fconsts (enum type)
+        pkey_field = fields[0] if fields else None
+        pkey_field_name = pkey_field.get("field", "") if pkey_field else ""
+        fconst_result = client.acr(f"dmmeta.fconst:{pkey_field_name}/%")
+        fconsts = fconst_result.records if fconst_result.ok else []
+        is_enum = len(fconsts) > 0
+
+        # Get non-pkey fields (the actual data fields)
+        data_fields = fields[1:] if len(fields) > 1 else []
+
+        type_example: dict[str, Any] = {
+            "ctype": ctype_name,
+            "type_name": type_name,
+            "comment": comment,
+            "is_enum": is_enum,
+            "code": [],
+        }
+
+        if is_enum:
+            # --- Enum usage examples ---
+            snake = _camel_to_snake(type_name)
+            fconst_values = [r.get("value", "") for r in fconsts]
+            fconst_comments = [r.get("comment", "") for r in fconsts]
+
+            # Enum constants
+            constants_list = ", ".join(
+                f"{ns}_{type_name}Case_{v}" for v in fconst_values[:3]
+            )
+            first_val = fconst_values[0] if fconst_values else "value"
+
+            type_example["enum_values"] = [
+                {"value": v, "constant": f"{ns}_{type_name}Case_{v}", "comment": c}
+                for v, c in zip(fconst_values, fconst_comments)
+            ]
+
+            type_example["code"] = [
+                {
+                    "description": f"Use {type_name} enum via the Case helper struct",
+                    "cpp": (
+                        f"// Construct from enum constant\n"
+                        f"{ns}::{type_name}Case val({ns}_{type_name}Case_{first_val});\n"
+                        f"\n"
+                        f"// Get enum value\n"
+                        f"{ns}_{type_name}CaseEnum e = {snake}_GetEnum(val);\n"
+                        f"\n"
+                        f"// Set enum value\n"
+                        f"{snake}_SetEnum(val, {ns}_{type_name}Case_{first_val});\n"
+                        f"\n"
+                        f"// Convert to string\n"
+                        f'const char* str = {snake}_ToCstr(val);  // returns "{first_val}"\n'
+                        f"\n"
+                        f"// Parse from string\n"
+                        f"{ns}::{type_name}Case parsed;\n"
+                        f'{snake}_SetStrptrMaybe(parsed, "{first_val}");  // returns true on success'
+                    ),
+                },
+                {
+                    "description": f"Use {type_name} as a string pkey (for FK fields)",
+                    "cpp": (
+                        f"{ns}::{type_name} rec;\n"
+                        f'rec.{snake} = "{first_val}";  // set pkey directly as string'
+                    ),
+                },
+                {
+                    "description": f"Compare / switch on {type_name} enum",
+                    "cpp": (
+                        f"{ns}::{type_name}Case val({ns}_{type_name}Case_{first_val});\n"
+                        f"switch ({snake}_GetEnum(val)) {{\n"
+                        + "".join(
+                            f"    case {ns}_{type_name}Case_{v}:  // {c}\n"
+                            f"        break;\n"
+                            for v, c in zip(fconst_values, fconst_comments)
+                        )
+                        + f"    default: break;\n"
+                        f"}}"
+                    ),
+                },
+            ]
+
+        else:
+            # --- Struct usage examples ---
+            snake = _camel_to_snake(type_name)
+            pkey_name = snake  # first field name
+
+            # Build field assignment lines
+            assign_lines = []
+            for f in data_fields:
+                fname = f.get("field", "").rsplit(".", 1)[-1]
+                arg = f.get("arg", "")
+                reftype = f.get("reftype", "")
+                fcomment = f.get("comment", "")
+                dflt = f.get("dflt", "")
+
+                if reftype == "Pkey":
+                    # FK field — set as string
+                    ref_type = arg.rsplit(".", 1)[-1] if "." in arg else arg
+                    assign_lines.append(
+                        f'rec.{fname} = "some_{_camel_to_snake(ref_type)}";'
+                        f"  // FK to {arg}"
+                    )
+                elif "cstring" in arg or "Smallstr" in arg or "Comment" in arg:
+                    assign_lines.append(
+                        f'rec.{fname} = "example";'
+                        f'  // {fcomment or arg}'
+                    )
+                elif arg in ("u8", "u16", "u32", "u64", "i8", "i16", "i32", "i64"):
+                    val = dflt if dflt else "0"
+                    assign_lines.append(
+                        f"rec.{fname} = {val};"
+                        f"  // {fcomment or arg}"
+                    )
+                elif arg == "bool":
+                    assign_lines.append(
+                        f"rec.{fname} = true;"
+                        f"  // {fcomment or arg}"
+                    )
+                elif arg in ("float", "double"):
+                    assign_lines.append(
+                        f"rec.{fname} = 0.0;"
+                        f"  // {fcomment or arg}"
+                    )
+                else:
+                    assign_lines.append(
+                        f"// rec.{fname} = ...;  // {arg} {fcomment}"
+                    )
+
+            assign_block = "\n".join(assign_lines)
+
+            type_example["fields"] = [
+                {
+                    "name": f.get("field", "").rsplit(".", 1)[-1],
+                    "arg": f.get("arg", ""),
+                    "reftype": f.get("reftype", ""),
+                    "comment": f.get("comment", ""),
+                }
+                for f in fields
+            ]
+
+            type_example["code"] = [
+                {
+                    "description": f"Create and populate a {type_name}",
+                    "cpp": (
+                        f"{ns}::{type_name} rec;\n"
+                        f'{type_name}_Init(rec);  // set defaults\n'
+                        f'rec.{pkey_name} = "my_{snake}_id";  // set primary key\n'
+                        + (f"{assign_block}\n" if assign_block else "")
+                    ),
+                },
+                {
+                    "description": f"Print {type_name} to string (ssim format)",
+                    "cpp": (
+                        f"algo::cstring out;\n"
+                        f"out << rec;  // uses generated operator<<\n"
+                        f"// or: {type_name}_Print(rec, out);"
+                    ),
+                },
+            ]
+
+        examples["types"].append(type_example)
+
+    return _json(examples)
+
+
 # ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------

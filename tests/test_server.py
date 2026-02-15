@@ -291,3 +291,66 @@ class TestCreateFconstUnit:
         result = json.loads(srv.create_fconst("bad.Field.x", "val"))
         assert result["ok"] is False
         assert "error" in result
+
+
+@skip_no_openacr
+class TestGetUsageExamples:
+    """Integration tests for get_usage_examples tool."""
+
+    @pytest.fixture(autouse=True)
+    def setup_client(self):
+        srv._client = AcrClient(OPENACR_DIR)
+        yield
+        srv._client = None
+
+    def test_returns_valid_json(self):
+        result = json.loads(srv.get_usage_examples("bookdb"))
+        assert result["namespace"] == "bookdb"
+        assert "include" in result
+        assert "bookdb_gen.h" in result["include"]
+        assert len(result["types"]) > 0
+
+    def test_enum_has_code_examples(self):
+        result = json.loads(srv.get_usage_examples("bookdb"))
+        enums = [t for t in result["types"] if t["is_enum"]]
+        assert len(enums) > 0
+        genre = next((t for t in enums if t["type_name"] == "Genre"), None)
+        assert genre is not None
+        assert len(genre["code"]) >= 2
+        assert len(genre["enum_values"]) >= 2
+        # Check code contains GetEnum / SetEnum / ToCstr patterns
+        all_code = " ".join(c["cpp"] for c in genre["code"])
+        assert "GetEnum" in all_code
+        assert "SetEnum" in all_code
+        assert "ToCstr" in all_code
+
+    def test_struct_has_code_examples(self):
+        result = json.loads(srv.get_usage_examples("bookdb"))
+        structs = [t for t in result["types"] if not t["is_enum"]]
+        assert len(structs) > 0
+        book = next((t for t in structs if t["type_name"] == "Book"), None)
+        assert book is not None
+        assert len(book["code"]) >= 2
+        assert "fields" in book
+        # Check code contains Init and field assignment
+        all_code = " ".join(c["cpp"] for c in book["code"])
+        assert "Book_Init" in all_code
+        assert "rec." in all_code
+
+    def test_struct_fk_fields_shown(self):
+        result = json.loads(srv.get_usage_examples("bookdb"))
+        book = next((t for t in result["types"] if t["type_name"] == "Book"), None)
+        assert book is not None
+        # FK fields should show "FK to" in the code
+        create_code = book["code"][0]["cpp"]
+        assert "FK to" in create_code
+
+    def test_unknown_namespace(self):
+        result = json.loads(srv.get_usage_examples("nonexistent_ns"))
+        assert "error" in result
+
+    def test_skips_internal_types(self):
+        result = json.loads(srv.get_usage_examples("bookdb"))
+        type_names = [t["type_name"] for t in result["types"]]
+        assert "FieldId" not in type_names
+        assert not any(n.endswith("Case") for n in type_names)
