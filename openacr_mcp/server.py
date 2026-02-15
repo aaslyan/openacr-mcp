@@ -117,6 +117,22 @@ To create an enum:
 1. `create_ctype` with a -subset pkey field whose arg is algo.Smallstr20 (or similar)
 2. `create_fconst` for each enum value on the pkey field (field = "ns.Type.type", value = "MyValue")
 
+## Building Executables
+
+- `create_finput` — load ssimdb data at runtime (mutable tables)
+- `create_gstatic` — compile reference data into the binary (immutable, no disk I/O)
+- Use `indexed=True` with finput to get a Thash hash index for O(1) key lookup
+
+## Composite Keys & Bitfields
+
+- **Composite keys**: Use `create_substr_field` with `.LL` / `.LR` pathcomp expressions
+- **Bitfields**: Use `create_bitfield` to pack small values into integers
+- **Indexed access**: Use `create_field` with `xref=True`, `hashfld`, `sortfld`, `via`
+
+## Validation
+
+Always run `validate_schema()` after schema changes to check referential integrity.
+
 ## Call `get_workflow_guide` for detailed step-by-step examples.
 """,
 )
@@ -362,16 +378,30 @@ def create_field(
     reftype: str = "Val",
     dflt: str = "",
     comment: str = "",
+    xref: bool = False,
+    via: str = "",
+    hashfld: str = "",
+    sortfld: str = "",
+    inscond: str = "",
+    before: str = "",
+    cascdel: bool = False,
 ) -> str:
     """Add a field to an existing ctype.
 
     Args:
         ctype: Parent ctype (e.g., "myns.MyStruct")
         name: Field name (e.g., "count")
-        arg: Field type (e.g., "u32", "algo.cstring")
-        reftype: Reference type (Val, Pkey, Thash, Lary, etc.)
+        arg: Field type (e.g., "u32", "algo.cstring", "myns.MyType")
+        reftype: Reference type (Val, Pkey, Thash, Lary, Bheap, Atree, Llist, Ptrary, etc.)
         dflt: Default value
         comment: Field description
+        xref: If true, auto-create cross-reference record (for Thash/Bheap/Atree/Llist indexes)
+        via: Cross-reference path (e.g., "myns.Order/order"). Required with -xref for indexes
+        hashfld: Hash field for Thash reftypes (e.g., "myns.Order.order")
+        sortfld: Sort field for Bheap/Atree reftypes
+        inscond: Insert condition for xref (default: "true")
+        before: Place field before this field in the struct
+        cascdel: If true, deleting this record cascades to referenced records
 
     Returns:
         JSON with success status or error.
@@ -384,6 +414,20 @@ def create_field(
         args.extend(["-dflt", dflt])
     if comment:
         args.extend(["-comment", comment])
+    if xref:
+        args.append("-xref")
+    if via:
+        args.extend(["-via", via])
+    if hashfld:
+        args.extend(["-hashfld", hashfld])
+    if sortfld:
+        args.extend(["-sortfld", sortfld])
+    if inscond:
+        args.extend(["-inscond", inscond])
+    if before:
+        args.extend(["-before", before])
+    if cascdel:
+        args.append("-cascdel")
     result = client.acr_ed_create(args)
     return _json(result.to_dict())
 
@@ -444,6 +488,189 @@ def rename_record(old: str, new: str) -> str:
         return client
     result = client.acr_ed_rename(old, new)
     return _json(result.to_dict())
+
+
+@server.tool()
+def create_finput(target: str, ssimfile: str, indexed: bool = False) -> str:
+    """Add an in-memory table to an exe target, loaded from an ssimfile at startup.
+
+    This is how exe targets load ssimdb data at runtime. When the program starts,
+    the generated Init code reads the ssimfile and populates an in-memory table.
+    Use ``indexed=True`` to auto-add a Thash index for O(1) key lookup.
+
+    Args:
+        target: Exe target namespace (e.g., "myapp")
+        ssimfile: Ssimfile to load (e.g., "mydb.my_table")
+        indexed: If true, also create a hash index for the primary key
+
+    Returns:
+        JSON with success status or error.
+    """
+    client = _client_or_error()
+    if isinstance(client, str):
+        return client
+    args = ["-finput", "-target", target, "-ssimfile", ssimfile]
+    if indexed:
+        args.append("-indexed")
+    result = client.acr_ed_create(args)
+    return _json(result.to_dict())
+
+
+@server.tool()
+def create_gstatic(target: str, ssimfile: str) -> str:
+    """Add a compile-time static table to a target, baked into the binary.
+
+    Like finput but the data is compiled directly into the C++ binary.
+    No disk I/O at startup — the table is read-only and immutable.
+    Ideal for reference data: country codes, currency tables, error messages,
+    exchange instrument definitions, etc.
+
+    Args:
+        target: Target namespace (e.g., "myapp")
+        ssimfile: Ssimfile whose data will be compiled in (e.g., "mydb.country")
+
+    Returns:
+        JSON with success status or error.
+    """
+    client = _client_or_error()
+    if isinstance(client, str):
+        return client
+    args = ["-gstatic", "-target", target, "-ssimfile", ssimfile]
+    result = client.acr_ed_create(args)
+    return _json(result.to_dict())
+
+
+@server.tool()
+def create_substr_field(
+    ctype: str,
+    name: str,
+    expr: str,
+    srcfield: str,
+    comment: str = "",
+) -> str:
+    """Create a substring field that extracts part of a composite primary key.
+
+    Composite keys use separators (typically '/') to combine multiple references
+    into a single pkey. Substr fields extract the components. For example, if
+    ctype Review has pkey "movie/reviewer", you create substr fields to extract
+    the movie and reviewer parts.
+
+    Common expr values:
+    - ".LL" — left of separator (first component)
+    - ".LR" — right of separator (second component)
+    - ".RL" — second-to-last component
+    - ".RR" — last component
+
+    Args:
+        ctype: Parent ctype (e.g., "myns.Review")
+        name: Field name (e.g., "movie")
+        expr: Pathcomp expression (e.g., ".LL" for left part, ".LR" for right part)
+        srcfield: Source field to extract from (e.g., "myns.Review.review")
+        comment: Field description
+
+    Returns:
+        JSON with success status or error.
+    """
+    client = _client_or_error()
+    if isinstance(client, str):
+        return client
+    args = [
+        "-field", f"{ctype}.{name}",
+        "-substr", expr,
+        "-srcfield", srcfield,
+    ]
+    if comment:
+        args.extend(["-comment", comment])
+    result = client.acr_ed_create(args)
+    return _json(result.to_dict())
+
+
+@server.tool()
+def create_bitfield(
+    ctype: str,
+    name: str,
+    arg: str,
+    srcfield: str,
+    width: int = 1,
+    comment: str = "",
+) -> str:
+    """Create a bitfield packed into an integer field.
+
+    Bitfields allow packing multiple small values into a single integer.
+    Used in protocol definitions and compact data structures where memory
+    layout matters.
+
+    Args:
+        ctype: Parent ctype (e.g., "myns.Header")
+        name: Bitfield name (e.g., "version")
+        arg: Bitfield type (e.g., "u8", "u16", "u32")
+        srcfield: Integer field that holds the bits (e.g., "myns.Header.flags")
+        width: Bit width (number of bits, e.g., 4 for a 4-bit field)
+        comment: Field description
+
+    Returns:
+        JSON with success status or error.
+    """
+    client = _client_or_error()
+    if isinstance(client, str):
+        return client
+    # Insert a bitfld record via acr since acr_ed may not support all bitfield options
+    field_name = f"{ctype}.{name}"
+    # First create the field with Bitfld reftype
+    args = [
+        "-field", field_name,
+        "-arg", arg,
+        "-reftype", "Bitfld",
+        "-srcfield", srcfield,
+    ]
+    if comment:
+        args.extend(["-comment", comment])
+    result = client.acr_ed_create(args)
+    if not result.ok:
+        return _json(result.to_dict())
+    # Insert the bitfld width record
+    bitfld_line = (
+        f"dmmeta.bitfld  field:{field_name}"
+        f"  offset:0  width:{width}  srcfield:{srcfield}"
+        f'  comment:"{comment}"'
+    )
+    bfresult = client.acr_insert(bitfld_line)
+    return _json({"ok": result.ok, "field": field_name, "width": width})
+
+
+@server.tool()
+def validate_schema(pattern: str = "%") -> str:
+    """Run cross-reference and referential integrity checks on the schema.
+
+    Validates that all foreign key references are valid, ssimfiles exist for
+    ctypes that need them, required records are present, and other constraints
+    are satisfied.
+
+    Args:
+        pattern: ACR pattern to scope the check (default: "%" for everything).
+                 Use "dmmeta.ctype:myns.%" to check only one namespace.
+
+    Returns:
+        JSON with check results: ok=true if no errors, or a list of error records.
+    """
+    client = _client_or_error()
+    if isinstance(client, str):
+        return client
+    result = client.acr_check(pattern)
+    if result.ok:
+        return _json({"ok": True, "message": "Schema validation passed", "pattern": pattern})
+    # Parse error output — acr -check writes errors to stderr
+    errors = []
+    for line in result.stderr.splitlines():
+        line = line.strip()
+        if line and not line.startswith("report."):
+            errors.append(line)
+    return _json({
+        "ok": False,
+        "pattern": pattern,
+        "error_count": len(errors),
+        "errors": errors[:50],  # Cap at 50 errors
+    })
 
 
 # ===== Group 3: Code Generation & Discovery ===============================
@@ -653,9 +880,72 @@ def get_workflow_guide() -> str:
                 "steps": [
                     "1. create_target(name='myapp', nstype='exe', comment='My application')",
                     "2. The exe needs an FDb (global database) — it's auto-created",
-                    "3. To load data from a ssimdb, add finput records:",
-                    "   query('dmmeta.finput:myapp.FDb.%') to see existing inputs",
+                    "3. Add finput for each ssimfile the exe needs to load at runtime:",
+                    "   create_finput(target='myapp', ssimfile='mydb.my_table', indexed=True)",
+                    "   — indexed=True adds a Thash hash index for O(1) key lookup",
                     "4. run_amc() then run_abt(target='myapp') to build",
+                ],
+            },
+            {
+                "title": "Load reference data at compile time (gstatic)",
+                "steps": [
+                    "1. Create your reference data ssimdb: create_target('refdb', 'ssimdb')",
+                    "2. Add types and populate data files in data/refdb/*.ssim",
+                    "3. In your exe, use gstatic instead of finput:",
+                    "   create_gstatic(target='myapp', ssimfile='refdb.country')",
+                    "   — Data is compiled INTO the binary. No disk I/O at startup.",
+                    "   — The table is read-only and immutable at runtime.",
+                    "4. Use finput for mutable data that changes between runs,",
+                    "   gstatic for immutable reference data (currencies, countries, etc.)",
+                ],
+            },
+            {
+                "title": "Create a composite key (junction table)",
+                "steps": [
+                    "1. Create the junction ctype with a composite pkey:",
+                    "   create_ctype('mydb', 'MovieCast', 'Movie-actor association')",
+                    "   — pkey field 'movie_cast' stores 'movie/actor' composite",
+                    "2. Add substr fields to extract each component:",
+                    "   create_substr_field('mydb.MovieCast', 'movie', '.LL', 'mydb.MovieCast.movie_cast')",
+                    "   create_substr_field('mydb.MovieCast', 'actor', '.LR', 'mydb.MovieCast.movie_cast')",
+                    "   — .LL = left of '/', .LR = right of '/'",
+                    "3. Add data fields: create_field('mydb.MovieCast', 'role_name', 'algo.cstring', 'Val')",
+                    "4. Separator defaults to '/' for composite keys",
+                ],
+            },
+            {
+                "title": "Create a bitfield-packed struct",
+                "steps": [
+                    "1. Create the ctype: create_ctype('myproto', 'Header', 'Protocol header')",
+                    "2. Add the integer field that holds the bits:",
+                    "   create_field('myproto.Header', 'flags', 'u32', 'Val')",
+                    "3. Add bitfields packed into it:",
+                    "   create_bitfield('myproto.Header', 'version', 'u8', 'myproto.Header.flags', width=4)",
+                    "   create_bitfield('myproto.Header', 'type', 'u8', 'myproto.Header.flags', width=4)",
+                    "4. run_amc() — generates accessors: version_Get(hdr), version_Set(hdr, val)",
+                ],
+            },
+            {
+                "title": "Add indexed access paths to an exe (Thash/Bheap)",
+                "steps": [
+                    "1. After create_finput, add indexed fields with xref:",
+                    "   create_field('myapp.FDb', 'ind_order', 'myapp.Order', 'Thash',",
+                    "     xref=True, hashfld='myapp.Order.order', via='myapp.Order/order')",
+                    "   — Creates a hash table indexed by order pkey",
+                    "2. For sorted access (priority queue):",
+                    "   create_field('myapp.FDb', 'bh_order', 'myapp.Order', 'Bheap',",
+                    "     xref=True, sortfld='myapp.Order.price')",
+                    "3. run_amc() — generates: ind_order_Find(key), bh_order_First()",
+                ],
+            },
+            {
+                "title": "Validate schema integrity",
+                "steps": [
+                    "1. After making schema changes, always validate:",
+                    "   validate_schema() — checks ALL referential integrity",
+                    "   validate_schema('dmmeta.ctype:myns.%') — check one namespace",
+                    "2. Common errors: broken FK refs, missing ssimfiles, dangling records",
+                    "3. Fix any errors before running amc",
                 ],
             },
         ],

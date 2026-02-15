@@ -34,13 +34,13 @@ class TestServerTools:
         assert "algo" in ns_names
 
     def test_get_namespace_tree(self):
-        result = json.loads(srv.get_namespace_tree("bookdb"))
+        result = json.loads(srv.get_namespace_tree("dev"))
         assert result["ok"] is True
-        assert result["namespace"] == "bookdb"
+        assert result["namespace"] == "dev"
         # Tree should contain ctypes, fields, and fconsts
         tree = result["tree"]
-        assert "dmmeta.ctype  ctype:bookdb.Genre" in tree
-        assert "dmmeta.field  field:bookdb.Genre.genre" in tree
+        assert "dmmeta.ctype  ctype:dev.Mdmark" in tree
+        assert "dmmeta.field  field:dev.Mdmark.mdmark" in tree
         assert "dmmeta.fconst" in tree
         assert "dmmeta.ssimfile" in tree
 
@@ -326,6 +326,259 @@ class TestCreateFconstUnit:
         assert "error" in result
 
 
+class TestCreateFinput:
+    """Unit tests for create_finput tool."""
+
+    @pytest.fixture(autouse=True)
+    def setup_mock_client(self):
+        mock_client = MagicMock(spec=AcrClient)
+        srv._client = mock_client
+        self.mock_client = mock_client
+        yield
+        srv._client = None
+
+    def test_calls_acr_ed_create(self):
+        self.mock_client.acr_ed_create.return_value = AcrResult(ok=True)
+        result = json.loads(srv.create_finput("myapp", "mydb.my_table"))
+        assert result["ok"] is True
+        self.mock_client.acr_ed_create.assert_called_once()
+        call_args = self.mock_client.acr_ed_create.call_args[0][0]
+        assert "-finput" in call_args
+        assert "-target" in call_args
+        assert "myapp" in call_args
+        assert "-ssimfile" in call_args
+        assert "mydb.my_table" in call_args
+        assert "-indexed" not in call_args
+
+    def test_indexed_flag(self):
+        self.mock_client.acr_ed_create.return_value = AcrResult(ok=True)
+        result = json.loads(srv.create_finput("myapp", "mydb.my_table", indexed=True))
+        assert result["ok"] is True
+        call_args = self.mock_client.acr_ed_create.call_args[0][0]
+        assert "-indexed" in call_args
+
+    def test_propagates_error(self):
+        self.mock_client.acr_ed_create.return_value = AcrResult(
+            ok=False, stderr="ssimfile not found", returncode=1
+        )
+        result = json.loads(srv.create_finput("myapp", "bad.table"))
+        assert result["ok"] is False
+        assert "error" in result
+
+
+class TestCreateGstatic:
+    """Unit tests for create_gstatic tool."""
+
+    @pytest.fixture(autouse=True)
+    def setup_mock_client(self):
+        mock_client = MagicMock(spec=AcrClient)
+        srv._client = mock_client
+        self.mock_client = mock_client
+        yield
+        srv._client = None
+
+    def test_calls_acr_ed_create(self):
+        self.mock_client.acr_ed_create.return_value = AcrResult(ok=True)
+        result = json.loads(srv.create_gstatic("myapp", "mydb.country"))
+        assert result["ok"] is True
+        call_args = self.mock_client.acr_ed_create.call_args[0][0]
+        assert "-gstatic" in call_args
+        assert "-target" in call_args
+        assert "myapp" in call_args
+        assert "-ssimfile" in call_args
+        assert "mydb.country" in call_args
+
+    def test_propagates_error(self):
+        self.mock_client.acr_ed_create.return_value = AcrResult(
+            ok=False, stderr="target not found", returncode=1
+        )
+        result = json.loads(srv.create_gstatic("bad", "bad.table"))
+        assert result["ok"] is False
+
+
+class TestCreateFieldXref:
+    """Unit tests for create_field xref/hashfld/sortfld/cascdel options."""
+
+    @pytest.fixture(autouse=True)
+    def setup_mock_client(self):
+        mock_client = MagicMock(spec=AcrClient)
+        srv._client = mock_client
+        self.mock_client = mock_client
+        yield
+        srv._client = None
+
+    def test_xref_with_hashfld(self):
+        self.mock_client.acr_ed_create.return_value = AcrResult(ok=True)
+        result = json.loads(srv.create_field(
+            "myapp.FDb", "ind_order", "myapp.Order", "Thash",
+            xref=True, via="myapp.Order/order",
+            hashfld="myapp.Order.order",
+        ))
+        assert result["ok"] is True
+        call_args = self.mock_client.acr_ed_create.call_args[0][0]
+        assert "-xref" in call_args
+        assert "-via" in call_args
+        assert "myapp.Order/order" in call_args
+        assert "-hashfld" in call_args
+        assert "myapp.Order.order" in call_args
+
+    def test_sortfld(self):
+        self.mock_client.acr_ed_create.return_value = AcrResult(ok=True)
+        srv.create_field(
+            "myapp.FDb", "bh_order", "myapp.Order", "Bheap",
+            xref=True, sortfld="myapp.Order.price",
+        )
+        call_args = self.mock_client.acr_ed_create.call_args[0][0]
+        assert "-sortfld" in call_args
+        assert "myapp.Order.price" in call_args
+
+    def test_cascdel(self):
+        self.mock_client.acr_ed_create.return_value = AcrResult(ok=True)
+        srv.create_field("myapp.Order", "items", "myapp.Item", "Lary", cascdel=True)
+        call_args = self.mock_client.acr_ed_create.call_args[0][0]
+        assert "-cascdel" in call_args
+
+    def test_before(self):
+        self.mock_client.acr_ed_create.return_value = AcrResult(ok=True)
+        srv.create_field(
+            "myapp.Order", "priority", "u32", "Val",
+            before="myapp.Order.status",
+        )
+        call_args = self.mock_client.acr_ed_create.call_args[0][0]
+        assert "-before" in call_args
+        assert "myapp.Order.status" in call_args
+
+    def test_no_xref_flags_by_default(self):
+        self.mock_client.acr_ed_create.return_value = AcrResult(ok=True)
+        srv.create_field("myapp.Order", "name", "algo.cstring", "Val")
+        call_args = self.mock_client.acr_ed_create.call_args[0][0]
+        assert "-xref" not in call_args
+        assert "-via" not in call_args
+        assert "-hashfld" not in call_args
+        assert "-sortfld" not in call_args
+        assert "-cascdel" not in call_args
+        assert "-before" not in call_args
+
+
+class TestCreateSubstrField:
+    """Unit tests for create_substr_field tool."""
+
+    @pytest.fixture(autouse=True)
+    def setup_mock_client(self):
+        mock_client = MagicMock(spec=AcrClient)
+        srv._client = mock_client
+        self.mock_client = mock_client
+        yield
+        srv._client = None
+
+    def test_calls_acr_ed_create(self):
+        self.mock_client.acr_ed_create.return_value = AcrResult(ok=True)
+        result = json.loads(srv.create_substr_field(
+            "mydb.Review", "movie", ".LL", "mydb.Review.review", "Movie part of composite key",
+        ))
+        assert result["ok"] is True
+        call_args = self.mock_client.acr_ed_create.call_args[0][0]
+        assert "-field" in call_args
+        assert "mydb.Review.movie" in call_args
+        assert "-substr" in call_args
+        assert ".LL" in call_args
+        assert "-srcfield" in call_args
+        assert "mydb.Review.review" in call_args
+
+    def test_right_component(self):
+        self.mock_client.acr_ed_create.return_value = AcrResult(ok=True)
+        srv.create_substr_field(
+            "mydb.Review", "reviewer", ".LR", "mydb.Review.review",
+        )
+        call_args = self.mock_client.acr_ed_create.call_args[0][0]
+        assert ".LR" in call_args
+
+    def test_propagates_error(self):
+        self.mock_client.acr_ed_create.return_value = AcrResult(
+            ok=False, stderr="ctype not found", returncode=1
+        )
+        result = json.loads(srv.create_substr_field("bad.Type", "x", ".LL", "bad.Type.y"))
+        assert result["ok"] is False
+
+
+class TestCreateBitfield:
+    """Unit tests for create_bitfield tool."""
+
+    @pytest.fixture(autouse=True)
+    def setup_mock_client(self):
+        mock_client = MagicMock(spec=AcrClient)
+        srv._client = mock_client
+        self.mock_client = mock_client
+        yield
+        srv._client = None
+
+    def test_calls_acr_ed_create(self):
+        self.mock_client.acr_ed_create.return_value = AcrResult(ok=True)
+        self.mock_client.acr_insert.return_value = AcrResult(ok=True)
+        result = json.loads(srv.create_bitfield(
+            "myns.Header", "version", "u8", "myns.Header.flags", width=4, comment="Protocol version",
+        ))
+        assert result["ok"] is True
+        assert result["field"] == "myns.Header.version"
+        assert result["width"] == 4
+        # Verify acr_ed -create was called with Bitfld reftype
+        call_args = self.mock_client.acr_ed_create.call_args[0][0]
+        assert "-reftype" in call_args
+        idx = call_args.index("-reftype")
+        assert call_args[idx + 1] == "Bitfld"
+        assert "-srcfield" in call_args
+        assert "myns.Header.flags" in call_args
+
+    def test_create_failure(self):
+        self.mock_client.acr_ed_create.return_value = AcrResult(
+            ok=False, stderr="field exists", returncode=1
+        )
+        result = json.loads(srv.create_bitfield("myns.X", "y", "u8", "myns.X.f"))
+        assert result["ok"] is False
+
+
+class TestValidateSchema:
+    """Unit tests for validate_schema tool."""
+
+    @pytest.fixture(autouse=True)
+    def setup_mock_client(self):
+        mock_client = MagicMock(spec=AcrClient)
+        srv._client = mock_client
+        self.mock_client = mock_client
+        yield
+        srv._client = None
+
+    def test_passes(self):
+        self.mock_client.acr_check.return_value = AcrResult(ok=True)
+        result = json.loads(srv.validate_schema())
+        assert result["ok"] is True
+        assert result["pattern"] == "%"
+        self.mock_client.acr_check.assert_called_once_with("%")
+
+    def test_scoped_pattern(self):
+        self.mock_client.acr_check.return_value = AcrResult(ok=True)
+        result = json.loads(srv.validate_schema("dmmeta.ctype:myns.%"))
+        assert result["ok"] is True
+        self.mock_client.acr_check.assert_called_once_with("dmmeta.ctype:myns.%")
+
+    def test_reports_errors(self):
+        self.mock_client.acr_check.return_value = AcrResult(
+            ok=False,
+            stderr="acr.badrefs  ctype:myns.Bad  field:myns.Bad.x  error:broken FK\n"
+                   "acr.badrefs  ctype:myns.Bad  field:myns.Bad.y  error:missing ref\n",
+            returncode=1,
+        )
+        result = json.loads(srv.validate_schema("dmmeta.ctype:myns.%"))
+        assert result["ok"] is False
+        assert result["error_count"] == 2
+        assert len(result["errors"]) == 2
+
+    def test_no_client(self):
+        srv._client = None
+        result = json.loads(srv.validate_schema())
+        assert "error" in result
+
+
 @skip_no_openacr
 class TestGetUsageExamples:
     """Integration tests for get_usage_examples tool."""
@@ -337,45 +590,45 @@ class TestGetUsageExamples:
         srv._client = None
 
     def test_returns_valid_json(self):
-        result = json.loads(srv.get_usage_examples("bookdb"))
-        assert result["namespace"] == "bookdb"
+        result = json.loads(srv.get_usage_examples("dev"))
+        assert result["namespace"] == "dev"
         assert "include" in result
-        assert "bookdb_gen.h" in result["include"]
+        assert "dev_gen.h" in result["include"]
         assert len(result["types"]) > 0
 
     def test_enum_has_code_examples(self):
-        result = json.loads(srv.get_usage_examples("bookdb"))
+        result = json.loads(srv.get_usage_examples("dev"))
         enums = [t for t in result["types"] if t["is_enum"]]
         assert len(enums) > 0
-        genre = next((t for t in enums if t["type_name"] == "Genre"), None)
-        assert genre is not None
-        assert len(genre["code"]) >= 2
-        assert len(genre["enum_values"]) >= 2
+        mdmark = next((t for t in enums if t["type_name"] == "Mdmark"), None)
+        assert mdmark is not None
+        assert len(mdmark["code"]) >= 2
+        assert len(mdmark["enum_values"]) >= 2
         # Check code contains GetEnum / SetEnum / ToCstr patterns
-        all_code = " ".join(c["cpp"] for c in genre["code"])
+        all_code = " ".join(c["cpp"] for c in mdmark["code"])
         assert "GetEnum" in all_code
         assert "SetEnum" in all_code
         assert "ToCstr" in all_code
 
     def test_struct_has_code_examples(self):
-        result = json.loads(srv.get_usage_examples("bookdb"))
+        result = json.loads(srv.get_usage_examples("dev"))
         structs = [t for t in result["types"] if not t["is_enum"]]
         assert len(structs) > 0
-        book = next((t for t in structs if t["type_name"] == "Book"), None)
-        assert book is not None
-        assert len(book["code"]) >= 2
-        assert "fields" in book
+        builddir = next((t for t in structs if t["type_name"] == "Builddir"), None)
+        assert builddir is not None
+        assert len(builddir["code"]) >= 2
+        assert "fields" in builddir
         # Check code contains Init and field assignment
-        all_code = " ".join(c["cpp"] for c in book["code"])
-        assert "Book_Init" in all_code
+        all_code = " ".join(c["cpp"] for c in builddir["code"])
+        assert "Builddir_Init" in all_code
         assert "rec." in all_code
 
     def test_struct_fk_fields_shown(self):
-        result = json.loads(srv.get_usage_examples("bookdb"))
-        book = next((t for t in result["types"] if t["type_name"] == "Book"), None)
-        assert book is not None
+        result = json.loads(srv.get_usage_examples("dev"))
+        builddir = next((t for t in result["types"] if t["type_name"] == "Builddir"), None)
+        assert builddir is not None
         # FK fields should show "FK to" in the code
-        create_code = book["code"][0]["cpp"]
+        create_code = builddir["code"][0]["cpp"]
         assert "FK to" in create_code
 
     def test_unknown_namespace(self):
@@ -383,7 +636,7 @@ class TestGetUsageExamples:
         assert "error" in result
 
     def test_skips_internal_types(self):
-        result = json.loads(srv.get_usage_examples("bookdb"))
+        result = json.loads(srv.get_usage_examples("dev"))
         type_names = [t["type_name"] for t in result["types"]]
         assert "FieldId" not in type_names
         assert not any(n.endswith("Case") for n in type_names)

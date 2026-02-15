@@ -241,6 +241,13 @@ class AcrClient:
         cmd = ["abt", target]
         return self._run(cmd, timeout=300)
 
+    # -- acr check ---------------------------------------------------------
+
+    def acr_check(self, pattern: str = "%") -> AcrResult:
+        """Run ``acr '<pattern>' -check`` for referential integrity validation."""
+        cmd = ["acr", pattern, "-check"]
+        return self._run(cmd, timeout=60)
+
     # -- convenience -------------------------------------------------------
 
     def list_namespaces(self) -> AcrResult:
