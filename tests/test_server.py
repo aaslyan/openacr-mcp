@@ -183,3 +183,111 @@ class TestCreateTarget:
         result = json.loads(srv.create_target("algo", "ssimdb"))
         assert result["ok"] is False
         assert "error" in result
+
+
+class TestCamelToSnake:
+    """Tests for the _camel_to_snake helper."""
+
+    def test_simple(self):
+        assert srv._camel_to_snake("Genre") == "genre"
+
+    def test_two_words(self):
+        assert srv._camel_to_snake("ReadingStatus") == "reading_status"
+
+    def test_three_words(self):
+        assert srv._camel_to_snake("OrderLineItem") == "order_line_item"
+
+    def test_already_lower(self):
+        assert srv._camel_to_snake("status") == "status"
+
+    def test_acronym(self):
+        assert srv._camel_to_snake("HTMLParser") == "html_parser"
+
+
+class TestCreateCtypeAutoSsimfile:
+    """Unit tests for create_ctype's auto-ssimfile behavior."""
+
+    @pytest.fixture(autouse=True)
+    def setup_mock_client(self):
+        mock_client = MagicMock(spec=AcrClient)
+        srv._client = mock_client
+        self.mock_client = mock_client
+        yield
+        srv._client = None
+
+    def test_ssimdb_auto_creates_ssimfile(self):
+        self.mock_client.acr_ed_create.return_value = AcrResult(ok=True)
+        self.mock_client.get_ns_type.return_value = "ssimdb"
+        self.mock_client.acr_insert.return_value = AcrResult(ok=True)
+        self.mock_client.amc.return_value = AcrResult(ok=True)
+
+        result = json.loads(srv.create_ctype("mydb", "MyRecord", "A record"))
+        assert result["ok"] is True
+        assert result["ssimfile_auto_created"] is True
+
+        # Verify ssimfile was inserted with correct snake_case name
+        self.mock_client.acr_insert.assert_called_once_with(
+            "dmmeta.ssimfile  ssimfile:mydb.my_record  ctype:mydb.MyRecord"
+        )
+        # Verify amc was re-run
+        self.mock_client.amc.assert_called_once()
+
+    def test_ssimdb_camel_case_conversion(self):
+        self.mock_client.acr_ed_create.return_value = AcrResult(ok=True)
+        self.mock_client.get_ns_type.return_value = "ssimdb"
+        self.mock_client.acr_insert.return_value = AcrResult(ok=True)
+        self.mock_client.amc.return_value = AcrResult(ok=True)
+
+        srv.create_ctype("mydb", "ReadingStatus")
+
+        self.mock_client.acr_insert.assert_called_once_with(
+            "dmmeta.ssimfile  ssimfile:mydb.reading_status  ctype:mydb.ReadingStatus"
+        )
+
+    def test_exe_namespace_no_ssimfile(self):
+        self.mock_client.acr_ed_create.return_value = AcrResult(ok=True)
+        self.mock_client.get_ns_type.return_value = "exe"
+
+        result = json.loads(srv.create_ctype("myapp", "Config"))
+        assert result["ok"] is True
+        self.mock_client.acr_insert.assert_not_called()
+
+    def test_ssimfile_insert_failure(self):
+        self.mock_client.acr_ed_create.return_value = AcrResult(ok=True)
+        self.mock_client.get_ns_type.return_value = "ssimdb"
+        self.mock_client.acr_insert.return_value = AcrResult(
+            ok=False, stderr="duplicate record", returncode=1
+        )
+
+        result = json.loads(srv.create_ctype("mydb", "Dup"))
+        assert "error" in result
+        assert "ssimfile insert failed" in result["error"]
+
+
+class TestCreateFconstUnit:
+    """Unit tests for create_fconst using acr_insert."""
+
+    @pytest.fixture(autouse=True)
+    def setup_mock_client(self):
+        mock_client = MagicMock(spec=AcrClient)
+        srv._client = mock_client
+        self.mock_client = mock_client
+        yield
+        srv._client = None
+
+    def test_calls_acr_insert(self):
+        self.mock_client.acr_insert.return_value = AcrResult(ok=True)
+        result = json.loads(srv.create_fconst("mydb.Status.status", "active", "Active"))
+        assert result["ok"] is True
+        assert result["fconst"] == "mydb.Status.status/active"
+        self.mock_client.acr_insert.assert_called_once()
+        call_arg = self.mock_client.acr_insert.call_args[0][0]
+        assert "fconst:mydb.Status.status/active" in call_arg
+
+    def test_propagates_error(self):
+        self.mock_client.acr_insert.return_value = AcrResult(
+            ok=False, stderr="field not found", returncode=1
+        )
+        result = json.loads(srv.create_fconst("bad.Field.x", "val"))
+        assert result["ok"] is False
+        assert "error" in result

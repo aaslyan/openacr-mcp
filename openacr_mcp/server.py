@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 from pathlib import Path
 from typing import Any
@@ -50,6 +51,13 @@ def _client_or_error() -> AcrClient | str:
     if _client is None:
         return _error("OpenACR client not initialized")
     return _client
+
+
+def _camel_to_snake(name: str) -> str:
+    """Convert CamelCase to snake_case (e.g. ReadingStatus -> reading_status)."""
+    s = re.sub(r"([A-Z]+)([A-Z][a-z])", r"\1_\2", name)
+    s = re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", s)
+    return s.lower()
 
 # ---------------------------------------------------------------------------
 # MCP Server
@@ -270,6 +278,8 @@ def create_target(name: str, nstype: str, comment: str = "") -> str:
 def create_ctype(namespace: str, name: str, comment: str = "") -> str:
     """Create a new ctype (struct) in a namespace.
 
+    For ssimdb namespaces, automatically creates the required ssimfile record.
+
     Args:
         namespace: Target namespace (e.g., "myns")
         name: Type name in CamelCase (e.g., "MyStruct")
@@ -281,10 +291,29 @@ def create_ctype(namespace: str, name: str, comment: str = "") -> str:
     client = _client_or_error()
     if isinstance(client, str):
         return client
-    args = ["-ctype", f"{namespace}.{name}"]
+    ctype_name = f"{namespace}.{name}"
+    args = ["-ctype", ctype_name]
     if comment:
         args.extend(["-comment", comment])
     result = client.acr_ed_create(args)
+
+    # For ssimdb namespaces, auto-insert the required ssimfile record
+    nstype = client.get_ns_type(namespace)
+    if nstype == "ssimdb":
+        ssimfile_name = f"{namespace}.{_camel_to_snake(name)}"
+        ssim_line = f"dmmeta.ssimfile  ssimfile:{ssimfile_name}  ctype:{ctype_name}"
+        ssim_result = client.acr_insert(ssim_line)
+        if not ssim_result.ok:
+            return _error(
+                f"ctype created but ssimfile insert failed: {ssim_result.stderr.strip()}",
+                ctype=ctype_name,
+            )
+        # Re-run amc now that ssimfile exists
+        client.amc()
+
+    # Re-read the result since we may have fixed the amc error
+    if nstype == "ssimdb":
+        return _json({"ok": True, "ctype": ctype_name, "ssimfile_auto_created": True})
     return _json(result.to_dict())
 
 
@@ -337,31 +366,12 @@ def create_fconst(field: str, value: str, comment: str = "") -> str:
     client = _client_or_error()
     if isinstance(client, str):
         return client
-    # fconst records are inserted directly via acr
     fconst_key = f"{field}/{value}"
     line = f'dmmeta.fconst  fconst:{fconst_key}  value:"{value}"  comment:"{comment}"'
-    proc_args = [str(client.bin_dir / "bash"), "-c",
-                 f'echo \'{line}\' | {client.bin_dir}/acr -insert -write']
-    # Simpler: use acr -insert
-    import subprocess
-    import os
-    env = os.environ.copy()
-    env["PATH"] = f"{client.bin_dir}:{env.get('PATH', '')}"
-    try:
-        proc = subprocess.run(
-            [str(client.bin_dir / "acr"), "-insert", "-write"],
-            input=line + "\n",
-            cwd=str(client.openacr_dir),
-            env=env,
-            capture_output=True,
-            text=True,
-            timeout=30,
-        )
-        if proc.returncode == 0:
-            return _json({"ok": True, "fconst": fconst_key})
-        return _json({"ok": False, "error": proc.stderr.strip()})
-    except Exception as e:
-        return _error(str(e))
+    result = client.acr_insert(line)
+    if result.ok:
+        return _json({"ok": True, "fconst": fconst_key})
+    return _json({"ok": False, "error": result.stderr.strip()})
 
 
 @server.tool()
@@ -570,7 +580,7 @@ def get_workflow_guide() -> str:
                 "steps": [
                     "1. create_target(name='mydb', nstype='ssimdb', comment='My database')",
                     "2. create_ctype(namespace='mydb', name='MyRecord', comment='A record type')",
-                    "   — This creates the ctype. The first field (pkey) is auto-created.",
+                    "   — This creates the ctype. The pkey field and ssimfile record are auto-created.",
                     "3. create_field(ctype='mydb.MyRecord', name='name', arg='algo.cstring', reftype='Val', comment='Record name')",
                     "4. create_field(ctype='mydb.MyRecord', name='count', arg='u32', reftype='Val', dflt='0', comment='Counter')",
                     "5. run_amc() — generates C++ code",
@@ -581,7 +591,7 @@ def get_workflow_guide() -> str:
                 "title": "Add an enum type",
                 "steps": [
                     "1. create_ctype(namespace='mydb', name='Status', comment='Record status')",
-                    "   — Creates mydb.Status ctype with auto-generated pkey field",
+                    "   — Creates mydb.Status ctype with auto-generated pkey field and ssimfile",
                     "2. create_fconst(field='mydb.Status.status', value='pending', comment='Not started')",
                     "3. create_fconst(field='mydb.Status.status', value='active', comment='In progress')",
                     "4. create_fconst(field='mydb.Status.status', value='done', comment='Completed')",

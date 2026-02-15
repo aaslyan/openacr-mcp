@@ -151,6 +151,34 @@ class AcrClient:
             result.records = parse_ssim_output(proc.stdout)
         return result
 
+    # -- acr insert --------------------------------------------------------
+
+    def acr_insert(self, line: str) -> AcrResult:
+        """Insert a raw ssim record via ``acr -insert -write``."""
+        try:
+            proc = subprocess.run(
+                [str(self.bin_dir / "acr"), "-insert", "-write"],
+                input=line + "\n",
+                cwd=str(self.openacr_dir),
+                env=self._env(),
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+            result = AcrResult(
+                ok=proc.returncode == 0,
+                stdout=proc.stdout,
+                stderr=proc.stderr,
+                returncode=proc.returncode,
+            )
+            if result.ok:
+                result.records = parse_ssim_output(proc.stdout)
+            return result
+        except FileNotFoundError:
+            return AcrResult(ok=False, stderr=f"Command not found: acr", returncode=-1)
+        except subprocess.TimeoutExpired:
+            return AcrResult(ok=False, stderr="Command timed out after 30s", returncode=-1)
+
     # -- acr queries -------------------------------------------------------
 
     def acr(self, pattern: str, *, tree: bool = False) -> AcrResult:
@@ -233,6 +261,13 @@ class AcrClient:
     def list_fields(self, ctype: str) -> AcrResult:
         """Query all fields for a ctype."""
         return self.acr(f"dmmeta.field:{ctype}.%")
+
+    def get_ns_type(self, namespace: str) -> str | None:
+        """Return the nstype for a namespace (e.g. 'ssimdb', 'exe'), or None if not found."""
+        result = self.acr(f"dmmeta.ns:{namespace}")
+        if result.ok and result.records:
+            return result.records[0].get("nstype")
+        return None
 
     def list_generated_headers(self, namespace: str) -> list[Path]:
         """List generated .h files for a namespace."""
