@@ -1,6 +1,9 @@
 """Tests for the MCP server tool functions."""
 
 import json
+import os
+import shutil
+import tempfile
 from unittest.mock import patch, MagicMock
 import pytest
 from pathlib import Path
@@ -1452,3 +1455,111 @@ class TestCreateBitfieldOffset:
         merge_arg = self.mock_client.acr_merge.call_args[0][0]
         assert "offset:0" in merge_arg
         assert "width:4" in merge_arg
+
+
+# ===== Standalone Project Support =========================================
+
+class TestAcrClientWorkDir:
+    """Tests for AcrClient.work_dir property."""
+
+    @pytest.fixture(autouse=True)
+    def setup_client(self):
+        self.client = MagicMock(spec=AcrClient)
+        # Simulate the real work_dir property behavior
+        self.real_client_openacr = Path("/fake/openacr")
+
+    def test_default_work_dir_is_openacr_dir(self):
+        client = AcrClient.__new__(AcrClient)
+        client.openacr_dir = Path("/fake/openacr")
+        client._work_dir = None
+        assert client.work_dir == Path("/fake/openacr")
+
+    def test_work_dir_override(self):
+        client = AcrClient.__new__(AcrClient)
+        client.openacr_dir = Path("/fake/openacr")
+        client._work_dir = None
+        client.work_dir = Path("/tmp/myproject")
+        assert client.work_dir == Path("/tmp/myproject")
+
+    def test_work_dir_reset(self):
+        client = AcrClient.__new__(AcrClient)
+        client.openacr_dir = Path("/fake/openacr")
+        client._work_dir = Path("/tmp/myproject")
+        client.work_dir = None
+        assert client.work_dir == Path("/fake/openacr")
+
+
+@skip_no_openacr
+class TestInitProject:
+    """Tests for init_project tool."""
+
+    @pytest.fixture(autouse=True)
+    def setup_client(self):
+        srv._client = AcrClient(OPENACR_DIR)
+        self.tmpdir = tempfile.mkdtemp()
+        self.project_dir = os.path.join(self.tmpdir, "testproj")
+        yield
+        srv._client = None
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    def test_creates_directory_structure(self):
+        result = json.loads(srv.init_project(self.project_dir))
+        assert result["ok"] is True
+        p = Path(self.project_dir)
+        assert (p / "data").is_dir()
+        assert (p / "bin").exists()
+        assert (p / "lock").is_dir()
+        assert (p / "include" / "gen").is_dir()
+        assert (p / "cpp" / "gen").is_dir()
+
+    def test_data_is_copy_not_symlink(self):
+        srv.init_project(self.project_dir)
+        p = Path(self.project_dir) / "data"
+        assert p.is_dir()
+        assert not p.is_symlink()
+
+    def test_bin_is_symlink(self):
+        srv.init_project(self.project_dir)
+        p = Path(self.project_dir) / "bin"
+        assert p.is_symlink()
+        assert p.resolve() == (OPENACR_DIR / "bin").resolve()
+
+    def test_rejects_existing_data(self):
+        srv.init_project(self.project_dir)
+        result = json.loads(srv.init_project(self.project_dir))
+        assert "error" in result
+        assert "already exists" in result["error"]
+
+
+@skip_no_openacr
+class TestSetProject:
+    """Tests for set_project tool."""
+
+    @pytest.fixture(autouse=True)
+    def setup_client(self):
+        srv._client = AcrClient(OPENACR_DIR)
+        self.tmpdir = tempfile.mkdtemp()
+        self.project_dir = os.path.join(self.tmpdir, "testproj")
+        # Bootstrap a valid project dir
+        srv.init_project(self.project_dir)
+        yield
+        srv._client = None
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    def test_sets_work_dir(self):
+        result = json.loads(srv.set_project(self.project_dir))
+        assert result["ok"] is True
+        assert result["work_dir"] == str(Path(self.project_dir).resolve())
+        assert srv._client.work_dir == Path(self.project_dir).resolve()
+
+    def test_reset_to_openacr(self):
+        srv.set_project(self.project_dir)
+        result = json.loads(srv.set_project(""))
+        assert result["ok"] is True
+        assert result["work_dir"] == str(OPENACR_DIR)
+        assert srv._client.work_dir == OPENACR_DIR
+
+    def test_rejects_invalid_path(self):
+        result = json.loads(srv.set_project("/nonexistent/bad/path"))
+        assert "error" in result
+        assert "data/dmmeta" in result["error"]

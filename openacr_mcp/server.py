@@ -21,6 +21,7 @@ import argparse
 import json
 import os
 import re
+import shutil
 import sys
 from pathlib import Path
 from typing import Any
@@ -163,9 +164,82 @@ To create an enum:
 
 Always run `validate_schema()` after schema changes to check referential integrity.
 
+## Standalone Projects
+
+Use standalone project directories to keep schema work isolated from the
+upstream OpenACR installation.  All reads/writes stay local to the project.
+
+- `init_project("/path/to/project")` — bootstrap a new project directory
+  (copies data/, symlinks bin/, creates lock/, include/gen/, cpp/gen/)
+- `set_project("/path/to/project")` — switch the working context to a project
+- `set_project("")` — switch back to the upstream openacr directory
+
 ## Call `get_workflow_guide` for detailed step-by-step examples.
 """,
 )
+
+# ===== Group 0: Project Management ========================================
+
+@server.tool()
+def init_project(path: str) -> str:
+    """Bootstrap a standalone project directory.
+
+    Copies the openacr data/ tree (metadata only, ~2 MB) into the project
+    directory and symlinks bin/ so all OpenACR commands work locally.
+    After init, call ``set_project`` to switch context.
+
+    Args:
+        path: Absolute or relative path to the new project directory.
+
+    Returns:
+        JSON with the resolved project_dir on success, or an error.
+    """
+    client = _client_or_error()
+    if isinstance(client, str):
+        return client
+
+    project = Path(path).resolve()
+    data_dst = project / "data"
+
+    if data_dst.exists():
+        return _error(f"data/ already exists at {project} — refusing to overwrite")
+
+    project.mkdir(parents=True, exist_ok=True)
+    shutil.copytree(client.openacr_dir / "data", data_dst)
+    os.symlink(client.openacr_dir / "bin", project / "bin")
+    for sub in ("lock", "include/gen", "cpp/gen"):
+        (project / sub).mkdir(parents=True, exist_ok=True)
+
+    return _json({"ok": True, "project_dir": str(project)})
+
+
+@server.tool()
+def set_project(path: str = "") -> str:
+    """Switch the working directory to a standalone project (or back to openacr).
+
+    Args:
+        path: Project directory path.  Empty string resets to upstream openacr.
+
+    Returns:
+        JSON with the active work_dir on success, or an error.
+    """
+    client = _client_or_error()
+    if isinstance(client, str):
+        return client
+
+    if not path:
+        client.work_dir = None
+        return _json({"ok": True, "work_dir": str(client.work_dir)})
+
+    resolved = Path(path).resolve()
+    if not (resolved / "data" / "dmmeta").is_dir():
+        return _error(f"Invalid project directory — missing data/dmmeta at {resolved}")
+    if not (resolved / "bin").exists():
+        return _error(f"Invalid project directory — missing bin/ at {resolved}")
+
+    client.work_dir = resolved
+    return _json({"ok": True, "work_dir": str(client.work_dir)})
+
 
 # ===== Group 1: Schema Query (read-only) =================================
 
@@ -1283,7 +1357,7 @@ def list_generated_headers(namespace: str) -> str:
     if isinstance(client, str):
         return client
     headers = client.list_generated_headers(namespace)
-    relative = [str(h.relative_to(client.openacr_dir)) for h in headers]
+    relative = [str(h.relative_to(client.work_dir)) for h in headers]
     return _json({"namespace": namespace, "headers": relative, "count": len(relative)})
 
 
@@ -1344,7 +1418,7 @@ def get_functions(namespace: str) -> str:
 
     for header_path in headers:
         parsed = parse_header_file(header_path)
-        rel_path = str(header_path.relative_to(client.openacr_dir))
+        rel_path = str(header_path.relative_to(client.work_dir))
         combined["headers_parsed"].append(rel_path)
         combined["total_enums"] += len(parsed.enums)
         combined["total_structs"] += len(parsed.structs)

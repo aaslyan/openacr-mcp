@@ -111,6 +111,7 @@ class AcrClient:
 
     def __init__(self, openacr_dir: str | Path):
         self.openacr_dir = Path(openacr_dir).resolve()
+        self._work_dir: Path | None = None
         self.bin_dir = self.openacr_dir / "bin"
         if not self.bin_dir.exists():
             raise FileNotFoundError(f"OpenACR bin dir not found: {self.bin_dir}")
@@ -121,12 +122,25 @@ class AcrClient:
         if bin_str not in os.environ.get("PATH", ""):
             os.environ["PATH"] = f"{bin_str}:{os.environ.get('PATH', '')}"
 
+    @property
+    def work_dir(self) -> Path:
+        """The working directory for subprocess cwd and file reads.
+
+        Defaults to openacr_dir; override with a project directory to
+        keep all reads/writes local to that project.
+        """
+        return self._work_dir or self.openacr_dir
+
+    @work_dir.setter
+    def work_dir(self, path: Path | None) -> None:
+        self._work_dir = path
+
     def _run(self, args: list[str], *, timeout: int = 30) -> AcrResult:
         """Run a command and return an AcrResult."""
         try:
             proc = subprocess.run(
                 args,
-                cwd=str(self.openacr_dir),
+                cwd=str(self.work_dir),
                 capture_output=True,
                 text=True,
                 timeout=timeout,
@@ -162,7 +176,7 @@ class AcrClient:
             proc = subprocess.run(
                 ["acr", "-insert", "-write"],
                 input=line + "\n",
-                cwd=str(self.openacr_dir),
+                cwd=str(self.work_dir),
                 capture_output=True,
                 text=True,
                 timeout=30,
@@ -266,7 +280,7 @@ class AcrClient:
             proc = subprocess.run(
                 ["acr", "-merge", "-write"],
                 input=line + "\n",
-                cwd=str(self.openacr_dir),
+                cwd=str(self.work_dir),
                 capture_output=True,
                 text=True,
                 timeout=30,
@@ -392,7 +406,7 @@ class AcrClient:
 
     def list_generated_headers(self, namespace: str) -> list[Path]:
         """List generated .h files for a namespace."""
-        gen_dir = self.openacr_dir / "include" / "gen"
+        gen_dir = self.work_dir / "include" / "gen"
         if not gen_dir.exists():
             return []
         headers = []
@@ -404,7 +418,7 @@ class AcrClient:
 
     def get_generated_code(self, header_path: str) -> str:
         """Read a generated header file. Path is relative to openacr dir."""
-        full_path = self.openacr_dir / header_path
+        full_path = self.work_dir / header_path
         if not full_path.exists():
             raise FileNotFoundError(f"Header not found: {full_path}")
         return full_path.read_text(encoding="utf-8")
