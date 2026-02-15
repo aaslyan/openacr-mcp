@@ -1886,6 +1886,12 @@ def main():
         default=Path.home() / "openacr",
         help="Path to OpenACR directory (default: ~/openacr)",
     )
+    parser.add_argument(
+        "--project",
+        type=Path,
+        default=None,
+        help="Bootstrap and activate a standalone project directory on startup",
+    )
 
     args = parser.parse_args()
 
@@ -1900,6 +1906,14 @@ def main():
     global _client
     _client = AcrClient(args.openacr_dir)
     print(f"OpenACR MCP server initialized: {args.openacr_dir} (cwd + PATH set)", file=sys.stderr)
+
+    if args.project:
+        project = Path(args.project).resolve()
+        if not (project / "data").exists():
+            result = init_project(str(project))
+            print(f"init_project: {result}", file=sys.stderr)
+        result = set_project(str(project))
+        print(f"set_project: {result}", file=sys.stderr)
 
     server.run("stdio")
 
