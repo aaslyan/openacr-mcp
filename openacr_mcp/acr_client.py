@@ -258,6 +258,74 @@ class AcrClient:
         cmd = ["acr", pattern, "-unused"]
         return self._run(cmd, timeout=60)
 
+    # -- acr merge/upsert --------------------------------------------------
+
+    def acr_merge(self, line: str) -> AcrResult:
+        """Upsert a record via ``acr -merge -write`` (update if exists, insert if not)."""
+        try:
+            proc = subprocess.run(
+                ["acr", "-merge", "-write"],
+                input=line + "\n",
+                cwd=str(self.openacr_dir),
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+            result = AcrResult(
+                ok=proc.returncode == 0,
+                stdout=proc.stdout,
+                stderr=proc.stderr,
+                returncode=proc.returncode,
+            )
+            if result.ok:
+                result.records = parse_ssim_output(proc.stdout)
+            return result
+        except FileNotFoundError:
+            return AcrResult(ok=False, stderr="Command not found: acr", returncode=-1)
+        except subprocess.TimeoutExpired:
+            return AcrResult(ok=False, stderr="Command timed out after 30s", returncode=-1)
+
+    # -- acr meta/field projection -----------------------------------------
+
+    def acr_meta(self, pattern: str) -> AcrResult:
+        """Run ``acr '<pattern>' -meta`` to get schema metadata for matching records."""
+        cmd = ["acr", pattern, "-meta"]
+        return self._run(cmd, timeout=30)
+
+    def acr_select_fields(self, pattern: str, fields: list[str]) -> AcrResult:
+        """Run ``acr '<pattern>' -field f1 -field f2 ...`` for column projection."""
+        cmd = ["acr", pattern]
+        for f in fields:
+            cmd.extend(["-field", f])
+        return self._run(cmd, timeout=30)
+
+    # -- acr_in / amc_vis --------------------------------------------------
+
+    def acr_in(self, target: str) -> AcrResult:
+        """Run ``acr_in <target>`` to list input table dependencies."""
+        cmd = ["acr_in", target]
+        return self._run(cmd, timeout=30)
+
+    def amc_vis(self, ctype: str) -> AcrResult:
+        """Run ``amc_vis <ctype>`` to get ASCII art structure diagram."""
+        cmd = ["amc_vis", ctype]
+        return self._run(cmd, timeout=30)
+
+    # -- acr_ed CI test / foutput ------------------------------------------
+
+    def acr_ed_create_citest(self, test_name: str, comment: str = "") -> AcrResult:
+        """Run ``acr_ed -create -citest <test> -write``."""
+        cmd = ["acr_ed", "-create", "-citest", test_name]
+        if comment:
+            cmd.extend(["-comment", comment])
+        cmd.append("-write")
+        return self._run(cmd, timeout=60)
+
+    def acr_ed_create_foutput(self, args: list[str]) -> AcrResult:
+        """Run ``acr_ed -create -foutput <args> -write``."""
+        cmd = ["acr_ed", "-create", "-foutput"] + args + ["-write"]
+        return self._run(cmd, timeout=60)
+
     # -- acr check ---------------------------------------------------------
 
     def acr_check(self, pattern: str = "%") -> AcrResult:

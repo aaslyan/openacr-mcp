@@ -135,6 +135,11 @@ To create an enum:
 - `list_ssimfiles` — list data tables in a namespace
 - `list_finputs` — list runtime tables an exe loads
 - `get_upstream` / `get_downstream` — traverse FK dependency graph (acr -nup / -ndown)
+- `find_unused` — find unreferenced records for cleanup
+- `get_record_meta` — get schema metadata (ctype/field definitions) for records
+- `select_fields` — query with column projection (return specific fields only)
+- `get_input_tables` — list all ssimfiles a target reads (full dependency graph via acr_in)
+- `visualize_ctype` — ASCII art diagram of type structure (via amc_vis)
 
 ## Structured Deletion
 
@@ -142,10 +147,17 @@ To create an enum:
 - `delete_field` — delete a field with cascade (fconsts, xrefs, etc.)
 - `delete_target` — delete an entire namespace with cascade
 
+## Record Updates
+
+- `update_record` — upsert a record (update if exists, insert if not) via acr -merge
+
 ## Scaffolding
 
 - `create_srcfile` — create a source file registered with a build target
 - `create_unittest` — scaffold a unit test function
+- `create_citest` — scaffold a CI integration test
+- `create_foutput` — declare output table for an exe target
+- `create_cppfunc` — create a computed field (C++ expression, not stored)
 
 ## Validation
 
@@ -411,6 +423,113 @@ def get_upstream(pattern: str, levels: int = 1) -> str:
         return client
     levels = max(1, min(100, levels))
     result = client.acr_nup(pattern, levels)
+    return _json(result.to_dict())
+
+
+@server.tool()
+def find_unused(pattern: str) -> str:
+    """Find records matching the pattern that are not referenced by any other record.
+
+    Useful for cleanup — identifying orphaned types, fields, or other records
+    that can be safely deleted.
+
+    Args:
+        pattern: ACR query pattern (e.g., "dmmeta.ctype:myns.%", "dmmeta.field:myns.%")
+
+    Returns:
+        JSON list of unreferenced records.
+    """
+    client = _client_or_error()
+    if isinstance(client, str):
+        return client
+    result = client.acr_unused(pattern)
+    return _json(result.to_dict())
+
+
+@server.tool()
+def get_record_meta(pattern: str) -> str:
+    """Get schema metadata for records matching the pattern.
+
+    Returns the ctype and field definitions that describe the structure of
+    the matched records. Useful for understanding what columns a table has.
+
+    Args:
+        pattern: ACR query pattern (e.g., "dmmeta.ctype:algo.Bool")
+
+    Returns:
+        JSON list of metadata records describing the schema.
+    """
+    client = _client_or_error()
+    if isinstance(client, str):
+        return client
+    result = client.acr_meta(pattern)
+    return _json(result.to_dict())
+
+
+@server.tool()
+def select_fields(pattern: str, fields: list[str]) -> str:
+    """Query records with field projection — only return specified columns.
+
+    Instead of returning all columns, select specific fields to reduce output.
+
+    Args:
+        pattern: ACR query pattern (e.g., "dmmeta.field:algo.%")
+        fields: List of field names to project (e.g., ["field", "arg", "reftype"])
+
+    Returns:
+        JSON with raw projected output text.
+    """
+    client = _client_or_error()
+    if isinstance(client, str):
+        return client
+    if not fields:
+        return _error("Must specify at least one field to project")
+    result = client.acr_select_fields(pattern, fields)
+    if result.ok:
+        return _json({"ok": True, "output": result.stdout, "pattern": pattern, "fields": fields})
+    return _json(result.to_dict())
+
+
+@server.tool()
+def get_input_tables(target: str) -> str:
+    """List all ssimfiles that a target reads as input at runtime.
+
+    Uses ``acr_in`` to show the complete data dependency graph — which
+    ssimfiles an exe needs loaded to function. More comprehensive than
+    ``list_finputs`` because it includes transitive dependencies.
+
+    Args:
+        target: Target name (e.g., "acr", "amc", "myapp")
+
+    Returns:
+        JSON list of input ssimfile records.
+    """
+    client = _client_or_error()
+    if isinstance(client, str):
+        return client
+    result = client.acr_in(target)
+    return _json(result.to_dict())
+
+
+@server.tool()
+def visualize_ctype(ctype: str) -> str:
+    """Generate an ASCII art diagram showing a ctype's field structure and relationships.
+
+    Uses ``amc_vis`` to produce a visual representation of the type layout,
+    showing Val fields, Pkey references, Base inheritance, etc.
+
+    Args:
+        ctype: Ctype to visualize (e.g., "dmmeta.Ctype", "algo.Bool")
+
+    Returns:
+        JSON with the ASCII art diagram as text.
+    """
+    client = _client_or_error()
+    if isinstance(client, str):
+        return client
+    result = client.amc_vis(ctype)
+    if result.ok:
+        return _json({"ok": True, "ctype": ctype, "diagram": result.stdout})
     return _json(result.to_dict())
 
 
@@ -898,6 +1017,107 @@ def create_unittest(target: str, funcname: str, comment: str = "") -> str:
         return client
     test_name = f"{target}.{funcname}"
     result = client.acr_ed_create_unittest(test_name, comment)
+    return _json(result.to_dict())
+
+
+@server.tool()
+def update_record(line: str) -> str:
+    """Update or insert a record (upsert) via ``acr -merge -write``.
+
+    If the record exists, updates only the changed attributes.
+    If the record does not exist, inserts it as a new record.
+    The line must be a valid ssim tuple.
+
+    Args:
+        line: Full ssim record line (e.g., 'dmmeta.ns  ns:myns  nstype:ssimdb  comment:"Updated"')
+
+    Returns:
+        JSON with success status or error.
+    """
+    client = _client_or_error()
+    if isinstance(client, str):
+        return client
+    result = client.acr_merge(line)
+    return _json(result.to_dict())
+
+
+@server.tool()
+def create_foutput(target: str, ssimfile: str) -> str:
+    """Declare that an exe target writes to an ssimfile (output table).
+
+    The inverse of finput — marks a table as an output destination for the program.
+
+    Args:
+        target: Exe target namespace (e.g., "myapp")
+        ssimfile: Ssimfile the target writes to (e.g., "mydb.my_table")
+
+    Returns:
+        JSON with success status or error.
+    """
+    client = _client_or_error()
+    if isinstance(client, str):
+        return client
+    args = ["-target", target, "-ssimfile", ssimfile]
+    result = client.acr_ed_create_foutput(args)
+    return _json(result.to_dict())
+
+
+@server.tool()
+def create_citest(target: str, testname: str, comment: str = "") -> str:
+    """Create a CI (integration) test scaffold.
+
+    CI tests run as part of the continuous integration pipeline and test
+    end-to-end behavior of a target.
+
+    Args:
+        target: Target that the test is for (e.g., "myapp")
+        testname: Test name (e.g., "myapp.Smoke")
+        comment: Description of the test
+
+    Returns:
+        JSON with success status or error.
+    """
+    client = _client_or_error()
+    if isinstance(client, str):
+        return client
+    result = client.acr_ed_create_citest(testname, comment)
+    return _json(result.to_dict())
+
+
+@server.tool()
+def create_cppfunc(
+    ctype: str,
+    name: str,
+    arg: str,
+    expr: str,
+    comment: str = "",
+) -> str:
+    """Create a computed field whose value is a C++ expression.
+
+    The field's value is not stored — it is computed at access time by
+    evaluating the given C++ expression. Useful for derived values.
+
+    Args:
+        ctype: Parent ctype (e.g., "myns.MyStruct")
+        name: Field name (e.g., "total_cost")
+        arg: Return type of the expression (e.g., "u32", "double", "algo.cstring")
+        expr: C++ expression to compute the value (e.g., "quantity * unit_price")
+        comment: Field description
+
+    Returns:
+        JSON with success status or error.
+    """
+    client = _client_or_error()
+    if isinstance(client, str):
+        return client
+    args = [
+        "-field", f"{ctype}.{name}",
+        "-arg", arg,
+        "-cppfunc", expr,
+    ]
+    if comment:
+        args.extend(["-comment", comment])
+    result = client.acr_ed_create(args)
     return _json(result.to_dict())
 
 
