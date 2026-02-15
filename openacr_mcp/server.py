@@ -138,6 +138,29 @@ def list_namespaces() -> str:
 
 
 @server.tool()
+def get_namespace_tree(namespace: str) -> str:
+    """Get a complete tree view of a namespace — all ctypes, fields, fconsts,
+    ssimfiles, cfmt records, and reverse references in one call.
+
+    This is the single best way to understand a namespace. Uses ``acr -t``
+    to print the full cross-reference tree.
+
+    Args:
+        namespace: The namespace to inspect (e.g., "moviedb", "reservedb")
+
+    Returns:
+        JSON with the tree output as indented ssim text.
+    """
+    client = _client_or_error()
+    if isinstance(client, str):
+        return client
+    result = client.acr(f"dmmeta.ns:{namespace}", tree=True)
+    if result.ok:
+        return _json({"ok": True, "namespace": namespace, "tree": result.stdout})
+    return _json(result.to_dict())
+
+
+@server.tool()
 def list_ctypes(namespace: str) -> str:
     """List all ctypes (structs) in a namespace.
 

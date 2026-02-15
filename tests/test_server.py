@@ -33,6 +33,23 @@ class TestServerTools:
         ns_names = [r["ns"] for r in result["records"]]
         assert "algo" in ns_names
 
+    def test_get_namespace_tree(self):
+        result = json.loads(srv.get_namespace_tree("bookdb"))
+        assert result["ok"] is True
+        assert result["namespace"] == "bookdb"
+        # Tree should contain ctypes, fields, and fconsts
+        tree = result["tree"]
+        assert "dmmeta.ctype  ctype:bookdb.Genre" in tree
+        assert "dmmeta.field  field:bookdb.Genre.genre" in tree
+        assert "dmmeta.fconst" in tree
+        assert "dmmeta.ssimfile" in tree
+
+    def test_get_namespace_tree_unknown(self):
+        result = json.loads(srv.get_namespace_tree("nonexistent_ns_xyz"))
+        # acr returns ok with empty output for unknown namespaces
+        assert result["ok"] is True
+        assert "tree" in result
+
     def test_list_ctypes(self):
         result = json.loads(srv.list_ctypes("algo"))
         assert result["ok"] is True
