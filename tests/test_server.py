@@ -205,7 +205,7 @@ class TestCamelToSnake:
 
 
 class TestCreateCtypeAutoSsimfile:
-    """Unit tests for create_ctype's auto-ssimfile behavior."""
+    """Unit tests for create_ctype's auto-ssimfile and cfmt behavior."""
 
     @pytest.fixture(autouse=True)
     def setup_mock_client(self):
@@ -215,7 +215,7 @@ class TestCreateCtypeAutoSsimfile:
         yield
         srv._client = None
 
-    def test_ssimdb_auto_creates_ssimfile(self):
+    def test_ssimdb_auto_creates_ssimfile_and_cfmt(self):
         self.mock_client.acr_ed_create.return_value = AcrResult(ok=True)
         self.mock_client.get_ns_type.return_value = "ssimdb"
         self.mock_client.acr_insert.return_value = AcrResult(ok=True)
@@ -224,11 +224,15 @@ class TestCreateCtypeAutoSsimfile:
         result = json.loads(srv.create_ctype("mydb", "MyRecord", "A record"))
         assert result["ok"] is True
         assert result["ssimfile_auto_created"] is True
+        assert result["cfmt_auto_created"] is True
 
-        # Verify ssimfile was inserted with correct snake_case name
-        self.mock_client.acr_insert.assert_called_once_with(
-            "dmmeta.ssimfile  ssimfile:mydb.my_record  ctype:mydb.MyRecord"
-        )
+        # Verify both ssimfile and cfmt were inserted
+        calls = self.mock_client.acr_insert.call_args_list
+        assert len(calls) == 2
+        assert "dmmeta.ssimfile  ssimfile:mydb.my_record  ctype:mydb.MyRecord" in calls[0][0][0]
+        assert "dmmeta.cfmt  cfmt:mydb.MyRecord.String" in calls[1][0][0]
+        assert "read:Y" in calls[1][0][0]
+        assert "print:Y" in calls[1][0][0]
         # Verify amc was re-run
         self.mock_client.amc.assert_called_once()
 
@@ -240,9 +244,8 @@ class TestCreateCtypeAutoSsimfile:
 
         srv.create_ctype("mydb", "ReadingStatus")
 
-        self.mock_client.acr_insert.assert_called_once_with(
-            "dmmeta.ssimfile  ssimfile:mydb.reading_status  ctype:mydb.ReadingStatus"
-        )
+        calls = self.mock_client.acr_insert.call_args_list
+        assert "dmmeta.ssimfile  ssimfile:mydb.reading_status  ctype:mydb.ReadingStatus" in calls[0][0][0]
 
     def test_exe_namespace_no_ssimfile(self):
         self.mock_client.acr_ed_create.return_value = AcrResult(ok=True)
@@ -262,6 +265,19 @@ class TestCreateCtypeAutoSsimfile:
         result = json.loads(srv.create_ctype("mydb", "Dup"))
         assert "error" in result
         assert "ssimfile insert failed" in result["error"]
+
+    def test_cfmt_insert_failure(self):
+        self.mock_client.acr_ed_create.return_value = AcrResult(ok=True)
+        self.mock_client.get_ns_type.return_value = "ssimdb"
+        # ssimfile succeeds, cfmt fails
+        self.mock_client.acr_insert.side_effect = [
+            AcrResult(ok=True),
+            AcrResult(ok=False, stderr="cfmt error", returncode=1),
+        ]
+
+        result = json.loads(srv.create_ctype("mydb", "Bad"))
+        assert "error" in result
+        assert "cfmt insert failed" in result["error"]
 
 
 class TestCreateFconstUnit:

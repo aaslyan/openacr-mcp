@@ -279,7 +279,8 @@ def create_target(name: str, nstype: str, comment: str = "") -> str:
 def create_ctype(namespace: str, name: str, comment: str = "") -> str:
     """Create a new ctype (struct) in a namespace.
 
-    For ssimdb namespaces, automatically creates the required ssimfile record.
+    For ssimdb namespaces, automatically creates the required ssimfile and
+    cfmt records so the type can be read/printed in Tuple format.
 
     Args:
         namespace: Target namespace (e.g., "myns")
@@ -298,7 +299,7 @@ def create_ctype(namespace: str, name: str, comment: str = "") -> str:
         args.extend(["-comment", comment])
     result = client.acr_ed_create(args)
 
-    # For ssimdb namespaces, auto-insert the required ssimfile record
+    # For ssimdb namespaces, auto-insert the required ssimfile and cfmt records
     nstype = client.get_ns_type(namespace)
     if nstype == "ssimdb":
         ssimfile_name = f"{namespace}.{_camel_to_snake(name)}"
@@ -309,12 +310,24 @@ def create_ctype(namespace: str, name: str, comment: str = "") -> str:
                 f"ctype created but ssimfile insert failed: {ssim_result.stderr.strip()}",
                 ctype=ctype_name,
             )
-        # Re-run amc now that ssimfile exists
+        # Auto-insert cfmt so the type has ReadStrptrMaybe / Print (needed by finput)
+        cfmt_line = (
+            f'dmmeta.cfmt  cfmt:{ctype_name}.String  printfmt:Tuple'
+            f'  read:Y  print:Y  sep:""  genop:Y  comment:""'
+        )
+        cfmt_result = client.acr_insert(cfmt_line)
+        if not cfmt_result.ok:
+            return _error(
+                f"ctype created but cfmt insert failed: {cfmt_result.stderr.strip()}",
+                ctype=ctype_name,
+            )
+        # Re-run amc now that ssimfile + cfmt exist
         client.amc()
 
     # Re-read the result since we may have fixed the amc error
     if nstype == "ssimdb":
-        return _json({"ok": True, "ctype": ctype_name, "ssimfile_auto_created": True})
+        return _json({"ok": True, "ctype": ctype_name, "ssimfile_auto_created": True,
+                       "cfmt_auto_created": True})
     return _json(result.to_dict())
 
 
