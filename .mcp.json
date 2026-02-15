@@ -1,9 +1,0 @@
-{
-  "mcpServers": {
-    "openacr": {
-      "command": "/Users/araaslyan/openacr-mcp/venv/bin/python",
-      "args": ["-m", "openacr_mcp", "--openacr-dir", "/Users/araaslyan/openacr"],
-      "cwd": "/Users/araaslyan/openacr-mcp"
-    }
-  }
-}

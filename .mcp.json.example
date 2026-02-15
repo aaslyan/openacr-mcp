@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "openacr": {
+      "command": "python",
+      "args": ["-m", "openacr_mcp", "--openacr-dir", "/path/to/openacr"],
+      "cwd": "/path/to/openacr-mcp"
+    }
+  }
+}
