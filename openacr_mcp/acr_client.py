@@ -179,6 +179,17 @@ class AcrClient:
         cmd = [str(self.bin_dir / "acr_ed"), "-create"] + args + ["-write"]
         return self._run(cmd, timeout=60)
 
+    def acr_ed_create_target(self, name: str, nstype: str, comment: str = "") -> AcrResult:
+        """Run ``acr_ed -create -target <name> -nstype <type> -write``.
+
+        Creates a new namespace/target (e.g. ssimdb, exe, lib).
+        """
+        cmd = [str(self.bin_dir / "acr_ed"), "-create", "-target", name, "-nstype", nstype]
+        if comment:
+            cmd.extend(["-comment", comment])
+        cmd.append("-write")
+        return self._run(cmd, timeout=60)
+
     def acr_ed_delete(self, pattern: str) -> AcrResult:
         """Run ``acr_ed -del -target <pattern> -write``."""
         cmd = [str(self.bin_dir / "acr"), "-del", "-write", pattern]

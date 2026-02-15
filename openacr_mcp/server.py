@@ -57,11 +57,59 @@ def _client_or_error() -> AcrClient | str:
 
 server = FastMCP(
     name="openacr",
-    instructions=(
-        "OpenACR MCP Server. Wraps the OpenACR CLI tools (acr, acr_ed, amc, abt) "
-        "to let AI agents query schemas, author new types/fields/enums, generate "
-        "C++ code, and discover available functions in generated headers."
-    ),
+    instructions="""\
+OpenACR MCP Server — relational schema to C++ code generator.
+
+## What is OpenACR?
+
+OpenACR defines data schemas as relational ssimfiles (simple structured input method).
+The code generator `amc` reads these schemas and produces C++ structs, enums, accessors,
+hash tables, linked lists, and other data structures — all from the relational model.
+
+## Typical Workflow
+
+1. **Query** existing schemas: `list_namespaces`, `list_ctypes`, `list_fields`, `query`, `search`
+2. **Author** new schemas: `create_target` → `create_ctype` → `create_field` → `create_fconst`
+3. **Generate** C++ code: `run_amc`
+4. **Build**: `run_abt`
+5. **Discover** generated API: `get_functions`, `list_generated_headers`, `get_generated_code`
+
+## Creating a New Project
+
+Start with `create_target` to create a namespace:
+- nstype `ssimdb` — a data-only namespace (tables/types, no executable)
+- nstype `exe` — an executable program
+- nstype `lib` — a shared library
+- nstype `protocol` — a protocol definition namespace
+
+## Schema Authoring Conventions
+
+**Type names**: CamelCase (e.g., `MyStruct`, `OrderStatus`)
+**Field names**: lowercase with underscores (e.g., `order_id`, `created_at`)
+**Primary key**: The first field of a ctype is usually its pkey, named the same as the ctype in lowercase.
+
+**Common arg types** (used in create_field `arg` parameter):
+- `algo.cstring` — variable-length string
+- `algo.Smallstr50` — fixed-capacity string (50 chars). Also: Smallstr10, Smallstr20, Smallstr100, Smallstr150, Smallstr200
+- `u32`, `u64`, `i32`, `i64` — unsigned/signed integers
+- `bool` — boolean
+- `algo.Comment` — a comment/description string
+
+**Reftype meanings** (used in create_field `reftype` parameter):
+- `Val` — inline value (the field stores the value directly)
+- `Pkey` — foreign key reference to another ctype's primary key
+- `Base` — inheritance (this ctype extends the referenced ctype)
+- `Thash` — hash table of records
+- `Lary` — level array (growable array)
+
+## Enum Pattern
+
+To create an enum:
+1. `create_ctype` with a -subset pkey field whose arg is algo.Smallstr20 (or similar)
+2. `create_fconst` for each enum value on the pkey field (field = "ns.Type.type", value = "MyValue")
+
+## Call `get_workflow_guide` for detailed step-by-step examples.
+""",
 )
 
 # ===== Group 1: Schema Query (read-only) =================================
@@ -196,6 +244,27 @@ def search(text: str) -> str:
 
 
 # ===== Group 2: Schema Authoring (wrap acr_ed) ============================
+
+@server.tool()
+def create_target(name: str, nstype: str, comment: str = "") -> str:
+    """Create a new namespace/target. This is the entry point for any new project.
+
+    Args:
+        name: Namespace name (e.g., "mydb", "myapp")
+        nstype: Namespace type — one of: ssimdb, exe, lib, protocol
+        comment: Description of the namespace
+
+    Returns:
+        JSON with success status or error.
+    """
+    client = _client_or_error()
+    if isinstance(client, str):
+        return client
+    if nstype not in ("ssimdb", "exe", "lib", "protocol"):
+        return _error(f"Invalid nstype '{nstype}'. Must be one of: ssimdb, exe, lib, protocol")
+    result = client.acr_ed_create_target(name, nstype, comment)
+    return _json(result.to_dict())
+
 
 @server.tool()
 def create_ctype(namespace: str, name: str, comment: str = "") -> str:
@@ -482,6 +551,113 @@ def get_functions(namespace: str) -> str:
             })
 
     return _json(combined)
+
+
+# ===== Group 4: Workflow Guide =============================================
+
+@server.tool()
+def get_workflow_guide() -> str:
+    """Get detailed step-by-step examples for common OpenACR workflows.
+
+    Returns:
+        JSON with workflow guides for creating ssimdb namespaces, enum types,
+        structs with FK relationships, and building executables.
+    """
+    guide = {
+        "workflows": [
+            {
+                "title": "Create a new ssimdb with types",
+                "steps": [
+                    "1. create_target(name='mydb', nstype='ssimdb', comment='My database')",
+                    "2. create_ctype(namespace='mydb', name='MyRecord', comment='A record type')",
+                    "   — This creates the ctype. The first field (pkey) is auto-created.",
+                    "3. create_field(ctype='mydb.MyRecord', name='name', arg='algo.cstring', reftype='Val', comment='Record name')",
+                    "4. create_field(ctype='mydb.MyRecord', name='count', arg='u32', reftype='Val', dflt='0', comment='Counter')",
+                    "5. run_amc() — generates C++ code",
+                    "6. get_functions(namespace='mydb') — discover the generated API",
+                ],
+            },
+            {
+                "title": "Add an enum type",
+                "steps": [
+                    "1. create_ctype(namespace='mydb', name='Status', comment='Record status')",
+                    "   — Creates mydb.Status ctype with auto-generated pkey field",
+                    "2. create_fconst(field='mydb.Status.status', value='pending', comment='Not started')",
+                    "3. create_fconst(field='mydb.Status.status', value='active', comment='In progress')",
+                    "4. create_fconst(field='mydb.Status.status', value='done', comment='Completed')",
+                    "5. run_amc() — generates C++ enum class Status { pending, active, done }",
+                ],
+                "notes": "The pkey field name is auto-derived as lowercase of the type name. "
+                         "For mydb.Status, the pkey field is 'mydb.Status.status'.",
+            },
+            {
+                "title": "Create a struct with foreign key references",
+                "steps": [
+                    "1. First create the referenced types (see 'Add an enum type')",
+                    "2. create_ctype(namespace='mydb', name='Task', comment='A task')",
+                    "3. create_field(ctype='mydb.Task', name='title', arg='algo.cstring', reftype='Val')",
+                    "4. create_field(ctype='mydb.Task', name='status', arg='mydb.Status', reftype='Pkey', comment='Task status')",
+                    "   — reftype='Pkey' creates a foreign key to mydb.Status",
+                    "5. run_amc()",
+                ],
+            },
+            {
+                "title": "Create an exe that uses a ssimdb",
+                "steps": [
+                    "1. create_target(name='myapp', nstype='exe', comment='My application')",
+                    "2. The exe needs an FDb (global database) — it's auto-created",
+                    "3. To load data from a ssimdb, add finput records:",
+                    "   query('dmmeta.finput:myapp.FDb.%') to see existing inputs",
+                    "4. run_amc() then run_abt(target='myapp') to build",
+                ],
+            },
+        ],
+        "arg_types_reference": {
+            "strings": {
+                "algo.cstring": "Variable-length string (heap-allocated)",
+                "algo.Smallstr10": "Fixed-capacity 10-char string (stack-allocated)",
+                "algo.Smallstr20": "Fixed-capacity 20-char string",
+                "algo.Smallstr50": "Fixed-capacity 50-char string",
+                "algo.Smallstr100": "Fixed-capacity 100-char string",
+                "algo.Smallstr150": "Fixed-capacity 150-char string",
+                "algo.Smallstr200": "Fixed-capacity 200-char string",
+                "algo.Comment": "Comment/description string",
+            },
+            "integers": {
+                "u8": "Unsigned 8-bit integer",
+                "u16": "Unsigned 16-bit integer",
+                "u32": "Unsigned 32-bit integer",
+                "u64": "Unsigned 64-bit integer",
+                "i8": "Signed 8-bit integer",
+                "i16": "Signed 16-bit integer",
+                "i32": "Signed 32-bit integer",
+                "i64": "Signed 64-bit integer",
+            },
+            "other": {
+                "bool": "Boolean",
+                "float": "32-bit float",
+                "double": "64-bit float",
+                "algo.UnTime": "Timestamp (Unix time in microseconds)",
+                "algo.UnDiff": "Time difference (microseconds)",
+            },
+        },
+        "reftype_reference": {
+            "Val": "Inline value — the field stores the data directly in the struct",
+            "Pkey": "Foreign key — references another ctype's primary key. "
+                    "Generated code includes lookup functions and referential integrity",
+            "Base": "Inheritance — this ctype extends the arg ctype. "
+                    "Fields from the base type are included in the derived type",
+            "Thash": "Hash table — stores a collection of records indexed by pkey. "
+                     "Used in FDb (global database) types for in-memory tables",
+            "Lary": "Level array — growable array with O(1) random access. "
+                    "Used for collections that grow but never shrink",
+            "Tary": "Tight array — standard growable array (like std::vector)",
+            "Llist": "Linked list — intrusive doubly-linked list",
+            "Count": "Count of linked records (no storage, just bookkeeping)",
+            "Upptr": "Up-pointer — cached pointer to parent record for fast traversal",
+        },
+    }
+    return _json(guide)
 
 
 # ---------------------------------------------------------------------------

@@ -1,11 +1,12 @@
 """Tests for the MCP server tool functions."""
 
 import json
+from unittest.mock import patch, MagicMock
 import pytest
 from pathlib import Path
 
 import openacr_mcp.server as srv
-from openacr_mcp.acr_client import AcrClient
+from openacr_mcp.acr_client import AcrClient, AcrResult
 
 OPENACR_DIR = Path.home() / "openacr"
 skip_no_openacr = pytest.mark.skipif(
@@ -95,4 +96,90 @@ class TestServerToolsNoClient:
 
     def test_query_no_client(self):
         result = json.loads(srv.query("dmmeta.ns:%"))
+        assert "error" in result
+
+    def test_create_target_no_client(self):
+        result = json.loads(srv.create_target("test", "ssimdb"))
+        assert "error" in result
+
+
+class TestGetWorkflowGuide:
+    """Tests for the get_workflow_guide tool (no client needed)."""
+
+    def test_returns_valid_json(self):
+        result = json.loads(srv.get_workflow_guide())
+        assert "workflows" in result
+        assert "arg_types_reference" in result
+        assert "reftype_reference" in result
+
+    def test_has_expected_workflow_sections(self):
+        result = json.loads(srv.get_workflow_guide())
+        titles = [w["title"] for w in result["workflows"]]
+        assert "Create a new ssimdb with types" in titles
+        assert "Add an enum type" in titles
+        assert "Create a struct with foreign key references" in titles
+        assert "Create an exe that uses a ssimdb" in titles
+
+    def test_arg_types_has_categories(self):
+        result = json.loads(srv.get_workflow_guide())
+        arg_types = result["arg_types_reference"]
+        assert "strings" in arg_types
+        assert "integers" in arg_types
+        assert "other" in arg_types
+        assert "algo.cstring" in arg_types["strings"]
+        assert "u32" in arg_types["integers"]
+
+    def test_reftype_reference_has_key_types(self):
+        result = json.loads(srv.get_workflow_guide())
+        reftypes = result["reftype_reference"]
+        assert "Val" in reftypes
+        assert "Pkey" in reftypes
+        assert "Base" in reftypes
+        assert "Thash" in reftypes
+
+    def test_each_workflow_has_steps(self):
+        result = json.loads(srv.get_workflow_guide())
+        for workflow in result["workflows"]:
+            assert "title" in workflow
+            assert "steps" in workflow
+            assert len(workflow["steps"]) >= 2
+
+
+class TestCreateTarget:
+    """Unit tests for create_target tool (mocked client)."""
+
+    @pytest.fixture(autouse=True)
+    def setup_mock_client(self):
+        mock_client = MagicMock(spec=AcrClient)
+        srv._client = mock_client
+        self.mock_client = mock_client
+        yield
+        srv._client = None
+
+    def test_calls_acr_ed_create_target(self):
+        self.mock_client.acr_ed_create_target.return_value = AcrResult(ok=True)
+        result = json.loads(srv.create_target("mydb", "ssimdb", "My database"))
+        assert result["ok"] is True
+        self.mock_client.acr_ed_create_target.assert_called_once_with(
+            "mydb", "ssimdb", "My database"
+        )
+
+    def test_rejects_invalid_nstype(self):
+        result = json.loads(srv.create_target("mydb", "invalid_type"))
+        assert "error" in result
+        assert "invalid_type" in result["error"]
+        self.mock_client.acr_ed_create_target.assert_not_called()
+
+    def test_valid_nstypes(self):
+        for nstype in ("ssimdb", "exe", "lib", "protocol"):
+            self.mock_client.acr_ed_create_target.return_value = AcrResult(ok=True)
+            result = json.loads(srv.create_target("test", nstype))
+            assert result["ok"] is True
+
+    def test_propagates_error(self):
+        self.mock_client.acr_ed_create_target.return_value = AcrResult(
+            ok=False, stderr="namespace already exists", returncode=1
+        )
+        result = json.loads(srv.create_target("algo", "ssimdb"))
+        assert result["ok"] is False
         assert "error" in result
