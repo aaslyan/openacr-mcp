@@ -1,6 +1,6 @@
 # OpenACR MCP Server
 
-An MCP (Model Context Protocol) server that wraps the [OpenACR](https://github.com/alexeilebedev/openacr) CLI tools, letting AI agents query schemas, author new types/fields/enums, generate C++ code, and discover the generated API. 44 tools, 148 tests.
+An MCP (Model Context Protocol) server that wraps the [OpenACR](https://github.com/alexeilebedev/openacr) CLI tools, letting AI agents query schemas, author new types/fields/enums, generate C++ code, and discover the generated API. 45 tools, 165 tests.
 
 ## Prerequisites
 
@@ -79,14 +79,15 @@ The test suite includes unit tests (always run) and integration tests (require O
 | `get_input_tables` | List all ssimfiles a target reads (acr_in) |
 | `visualize_ctype` | ASCII art type structure diagram (amc_vis) |
 
-### Schema Authoring (20 tools)
+### Schema Authoring (21 tools)
 
 | Tool | Description |
 |------|-------------|
 | `create_target` | Create a new namespace (ssimdb, exe, lib, protocol) |
 | `create_ctype` | Create a new ctype (auto-creates ssimfile + cfmt for ssimdb) |
 | `create_field` | Add a field to a ctype (supports xref, hashfld, sortfld, cascdel, before) |
-| `create_fconst` | Add an enum constant to a field |
+| `create_fconst` | Add an enum constant to a field (auto-derives pkey from ctype) |
+| `create_enum` | Create enum type with all constants in one call |
 | `create_finput` | Add runtime table loading for an exe target |
 | `create_gstatic` | Add compile-time static table (baked into binary) |
 | `create_foutput` | Declare output table for an exe target |
@@ -135,7 +136,7 @@ No manual wiring needed.
 ```
 1. create_target("mydb", "ssimdb")        -- create namespace
 2. create_ctype("mydb", "Status")         -- create enum type
-3. create_fconst("mydb.Status.status", "active")  -- add enum values
+3. create_fconst("mydb.Status", "active")          -- add enum values (auto-derives pkey)
 4. create_ctype("mydb", "Record")         -- create struct
 5. create_field("mydb.Record", "status", "mydb.Status", "Pkey")  -- add FK field
 6. run_amc()                              -- generate C++
@@ -150,11 +151,11 @@ openacr-mcp/
 ├── openacr_mcp/
 │   ├── __init__.py
 │   ├── __main__.py
-│   ├── server.py          # MCP server — 44 tools + embedded workflow knowledge
+│   ├── server.py          # MCP server — 45 tools + embedded workflow knowledge
 │   ├── acr_client.py      # Subprocess wrapper for acr/acr_ed/amc/abt/acr_in/amc_vis
 │   └── header_parser.py   # C++ header parser for generated code discovery
 ├── tests/
-│   ├── test_server.py     # 111 tests (unit + integration)
+│   ├── test_server.py     # 128 tests (unit + integration)
 │   ├── test_acr_client.py # 20 tests
 │   └── test_header_parser.py # 17 tests
 ├── .mcp.json.example      # Template MCP config (copy to .mcp.json)

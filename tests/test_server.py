@@ -1210,3 +1210,245 @@ class TestGetUsageExamples:
         type_names = [t["type_name"] for t in result["types"]]
         assert "FieldId" not in type_names
         assert not any(n.endswith("Case") for n in type_names)
+
+
+class TestCreateCtypeSubset:
+    """Unit tests for create_ctype's subset and separator parameters."""
+
+    @pytest.fixture(autouse=True)
+    def setup_mock_client(self):
+        mock_client = MagicMock(spec=AcrClient)
+        srv._client = mock_client
+        self.mock_client = mock_client
+        yield
+        srv._client = None
+
+    def test_subset_passed_to_acr_ed(self):
+        self.mock_client.acr_ed_create.return_value = AcrResult(ok=True)
+        self.mock_client.get_ns_type.return_value = "ssimdb"
+        self.mock_client.acr_insert.return_value = AcrResult(ok=True)
+        self.mock_client.amc.return_value = AcrResult(ok=True)
+
+        srv.create_ctype("mydb", "Status", subset="algo.Smallstr50")
+        call_args = self.mock_client.acr_ed_create.call_args[0][0]
+        assert "-subset" in call_args
+        idx = call_args.index("-subset")
+        assert call_args[idx + 1] == "algo.Smallstr50"
+
+    def test_separator_passed_to_acr_ed(self):
+        self.mock_client.acr_ed_create.return_value = AcrResult(ok=True)
+        self.mock_client.get_ns_type.return_value = "ssimdb"
+        self.mock_client.acr_insert.return_value = AcrResult(ok=True)
+        self.mock_client.amc.return_value = AcrResult(ok=True)
+
+        srv.create_ctype("mydb", "MovieCast", separator="/")
+        call_args = self.mock_client.acr_ed_create.call_args[0][0]
+        assert "-separator" in call_args
+        idx = call_args.index("-separator")
+        assert call_args[idx + 1] == "/"
+
+    def test_no_subset_no_separator_by_default(self):
+        self.mock_client.acr_ed_create.return_value = AcrResult(ok=True)
+        self.mock_client.get_ns_type.return_value = "exe"
+
+        srv.create_ctype("myapp", "Config")
+        call_args = self.mock_client.acr_ed_create.call_args[0][0]
+        assert "-subset" not in call_args
+        assert "-separator" not in call_args
+
+
+class TestCreateFconstAutoderive:
+    """Unit tests for create_fconst's auto-derive pkey field name."""
+
+    @pytest.fixture(autouse=True)
+    def setup_mock_client(self):
+        mock_client = MagicMock(spec=AcrClient)
+        srv._client = mock_client
+        self.mock_client = mock_client
+        yield
+        srv._client = None
+
+    def test_two_part_name_auto_derives(self):
+        """mydb.Status -> mydb.Status.status"""
+        self.mock_client.acr_insert.return_value = AcrResult(ok=True)
+        result = json.loads(srv.create_fconst("mydb.Status", "active", "Active"))
+        assert result["ok"] is True
+        assert result["fconst"] == "mydb.Status.status/active"
+        call_arg = self.mock_client.acr_insert.call_args[0][0]
+        assert "fconst:mydb.Status.status/active" in call_arg
+
+    def test_two_part_camel_case(self):
+        """mydb.ReadingStatus -> mydb.ReadingStatus.reading_status"""
+        self.mock_client.acr_insert.return_value = AcrResult(ok=True)
+        result = json.loads(srv.create_fconst("mydb.ReadingStatus", "pending"))
+        assert result["fconst"] == "mydb.ReadingStatus.reading_status/pending"
+
+    def test_three_part_name_unchanged(self):
+        """Full field path should pass through unchanged."""
+        self.mock_client.acr_insert.return_value = AcrResult(ok=True)
+        result = json.loads(srv.create_fconst("mydb.Status.status", "active"))
+        assert result["fconst"] == "mydb.Status.status/active"
+
+    def test_two_part_with_acronym(self):
+        """mydb.MpaaRating -> mydb.MpaaRating.mpaa_rating"""
+        self.mock_client.acr_insert.return_value = AcrResult(ok=True)
+        result = json.loads(srv.create_fconst("mydb.MpaaRating", "pg13"))
+        assert result["fconst"] == "mydb.MpaaRating.mpaa_rating/pg13"
+
+
+class TestCreateEnum:
+    """Unit tests for create_enum high-level tool."""
+
+    @pytest.fixture(autouse=True)
+    def setup_mock_client(self):
+        mock_client = MagicMock(spec=AcrClient)
+        srv._client = mock_client
+        self.mock_client = mock_client
+        yield
+        srv._client = None
+
+    def test_creates_ctype_and_fconsts(self):
+        self.mock_client.acr_ed_create.return_value = AcrResult(ok=True)
+        self.mock_client.acr_insert.return_value = AcrResult(ok=True)
+
+        result = json.loads(srv.create_enum(
+            "mydb", "Status", ["pending", "active", "done"], comment="Task status",
+        ))
+        assert result["ok"] is True
+        assert result["ctype"] == "mydb.Status"
+        assert result["pkey_field"] == "mydb.Status.status"
+        assert len(result["fconsts_created"]) == 3
+        assert "mydb.Status.status/pending" in result["fconsts_created"]
+        assert "mydb.Status.status/active" in result["fconsts_created"]
+        assert "mydb.Status.status/done" in result["fconsts_created"]
+
+        # Verify acr_ed_create was called with -subset
+        call_args = self.mock_client.acr_ed_create.call_args[0][0]
+        assert "-ctype" in call_args
+        assert "mydb.Status" in call_args
+        assert "-subset" in call_args
+        assert "algo.Smallstr50" in call_args
+
+    def test_custom_subset(self):
+        self.mock_client.acr_ed_create.return_value = AcrResult(ok=True)
+        self.mock_client.acr_insert.return_value = AcrResult(ok=True)
+
+        srv.create_enum("mydb", "Priority", ["low", "high"], subset="algo.Smallstr20")
+        call_args = self.mock_client.acr_ed_create.call_args[0][0]
+        idx = call_args.index("-subset")
+        assert call_args[idx + 1] == "algo.Smallstr20"
+
+    def test_ctype_creation_failure(self):
+        self.mock_client.acr_ed_create.return_value = AcrResult(
+            ok=False, stderr="namespace not found", returncode=1,
+        )
+        result = json.loads(srv.create_enum("bad", "X", ["a"]))
+        assert result["ok"] is False
+        assert result["step"] == "create_ctype"
+
+    def test_partial_fconst_failure(self):
+        self.mock_client.acr_ed_create.return_value = AcrResult(ok=True)
+        self.mock_client.acr_insert.side_effect = [
+            AcrResult(ok=True),
+            AcrResult(ok=False, stderr="dup", returncode=1),
+            AcrResult(ok=True),
+        ]
+        result = json.loads(srv.create_enum("mydb", "X", ["a", "b", "c"]))
+        assert result["ok"] is False
+        assert len(result["fconsts_created"]) == 2
+        assert len(result["errors"]) == 1
+        assert result["errors"][0]["value"] == "b"
+
+    def test_camel_case_pkey_derivation(self):
+        self.mock_client.acr_ed_create.return_value = AcrResult(ok=True)
+        self.mock_client.acr_insert.return_value = AcrResult(ok=True)
+
+        result = json.loads(srv.create_enum(
+            "mydb", "MpaaRating", ["g", "pg", "r"],
+        ))
+        assert result["pkey_field"] == "mydb.MpaaRating.mpaa_rating"
+        assert "mydb.MpaaRating.mpaa_rating/g" in result["fconsts_created"]
+
+
+class TestCreateBitfieldOffset:
+    """Unit tests for create_bitfield offset auto-calculation."""
+
+    @pytest.fixture(autouse=True)
+    def setup_mock_client(self):
+        mock_client = MagicMock(spec=AcrClient)
+        srv._client = mock_client
+        self.mock_client = mock_client
+        yield
+        srv._client = None
+
+    def test_first_bitfield_offset_zero(self):
+        """First bitfield on a srcfield should get offset 0."""
+        self.mock_client.acr.return_value = AcrResult(ok=True, records=[])
+        self.mock_client.acr_ed_create.return_value = AcrResult(ok=True)
+        self.mock_client.acr_merge.return_value = AcrResult(ok=True)
+
+        result = json.loads(srv.create_bitfield(
+            "myns.Header", "version", "u8", "myns.Header.flags", width=4,
+        ))
+        assert result["ok"] is True
+        assert result["offset"] == 0
+        assert result["width"] == 4
+
+    def test_second_bitfield_offset_after_first(self):
+        """Second bitfield should be placed after the first."""
+        # Existing bitfield: offset=0, width=4
+        self.mock_client.acr.return_value = AcrResult(ok=True, records=[
+            {"_type": "dmmeta.bitfld", "field": "myns.Header.version",
+             "offset": "0", "width": "4", "srcfield": "myns.Header.flags"},
+        ])
+        self.mock_client.acr_ed_create.return_value = AcrResult(ok=True)
+        self.mock_client.acr_merge.return_value = AcrResult(ok=True)
+
+        result = json.loads(srv.create_bitfield(
+            "myns.Header", "is_final", "u8", "myns.Header.flags", width=1,
+        ))
+        assert result["ok"] is True
+        assert result["offset"] == 4
+        assert result["width"] == 1
+
+    def test_third_bitfield_stacks_correctly(self):
+        """Third bitfield should stack after second."""
+        self.mock_client.acr.return_value = AcrResult(ok=True, records=[
+            {"_type": "dmmeta.bitfld", "field": "myns.Header.version",
+             "offset": "0", "width": "4", "srcfield": "myns.Header.flags"},
+            {"_type": "dmmeta.bitfld", "field": "myns.Header.is_final",
+             "offset": "4", "width": "1", "srcfield": "myns.Header.flags"},
+        ])
+        self.mock_client.acr_ed_create.return_value = AcrResult(ok=True)
+        self.mock_client.acr_merge.return_value = AcrResult(ok=True)
+
+        result = json.loads(srv.create_bitfield(
+            "myns.Header", "reserved", "u8", "myns.Header.flags", width=3,
+        ))
+        assert result["offset"] == 5
+
+    def test_different_srcfield_not_counted(self):
+        """Bitfields on a different srcfield should not affect offset."""
+        self.mock_client.acr.return_value = AcrResult(ok=True, records=[
+            {"_type": "dmmeta.bitfld", "field": "myns.Header.other_bit",
+             "offset": "0", "width": "8", "srcfield": "myns.Header.other_flags"},
+        ])
+        self.mock_client.acr_ed_create.return_value = AcrResult(ok=True)
+        self.mock_client.acr_merge.return_value = AcrResult(ok=True)
+
+        result = json.loads(srv.create_bitfield(
+            "myns.Header", "version", "u8", "myns.Header.flags", width=4,
+        ))
+        assert result["offset"] == 0
+
+    def test_uses_acr_merge_not_insert(self):
+        """Offset record should use acr_merge (upsert) since acr_ed may have created one."""
+        self.mock_client.acr.return_value = AcrResult(ok=True, records=[])
+        self.mock_client.acr_ed_create.return_value = AcrResult(ok=True)
+        self.mock_client.acr_merge.return_value = AcrResult(ok=True)
+
+        srv.create_bitfield("myns.Header", "v", "u8", "myns.Header.flags", width=4)
+        self.mock_client.acr_merge.assert_called_once()
+        merge_arg = self.mock_client.acr_merge.call_args[0][0]
+        assert "offset:0" in merge_arg
+        assert "width:4" in merge_arg

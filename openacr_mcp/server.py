@@ -557,7 +557,13 @@ def create_target(name: str, nstype: str, comment: str = "") -> str:
 
 
 @server.tool()
-def create_ctype(namespace: str, name: str, comment: str = "") -> str:
+def create_ctype(
+    namespace: str,
+    name: str,
+    comment: str = "",
+    subset: str = "",
+    separator: str = "",
+) -> str:
     """Create a new ctype (struct) in a namespace.
 
     For ssimdb namespaces, automatically creates the required ssimfile and
@@ -567,6 +573,10 @@ def create_ctype(namespace: str, name: str, comment: str = "") -> str:
         namespace: Target namespace (e.g., "myns")
         name: Type name in CamelCase (e.g., "MyStruct")
         comment: Description of the type
+        subset: Primary key subset type (e.g., "algo.Smallstr50"). Sets the pkey
+                field's arg type. Important for enum types where you want a string pkey.
+        separator: Key separator for composite keys (default: "."). Use "/" for
+                   junction tables with composite pkeys like "movie/actor".
 
     Returns:
         JSON with success status or error.
@@ -576,6 +586,10 @@ def create_ctype(namespace: str, name: str, comment: str = "") -> str:
         return client
     ctype_name = f"{namespace}.{name}"
     args = ["-ctype", ctype_name]
+    if subset:
+        args.extend(["-subset", subset])
+    if separator:
+        args.extend(["-separator", separator])
     if comment:
         args.extend(["-comment", comment])
     result = client.acr_ed_create(args)
@@ -678,8 +692,13 @@ def create_field(
 def create_fconst(field: str, value: str, comment: str = "") -> str:
     """Add an enum constant to a field.
 
+    The ``field`` parameter can be either:
+    - A full field path: ``"myns.MyEnum.my_enum"`` (3 dot-separated parts)
+    - A ctype shorthand: ``"myns.MyEnum"`` (2 parts) — the pkey field name
+      is auto-derived from the CamelCase type name (MyEnum → my_enum)
+
     Args:
-        field: Parent field (e.g., "myns.MyEnum.value")
+        field: Parent field or ctype (e.g., "myns.MyEnum" or "myns.MyEnum.my_enum")
         value: Constant name (e.g., "Active")
         comment: Description of the constant
 
@@ -689,12 +708,79 @@ def create_fconst(field: str, value: str, comment: str = "") -> str:
     client = _client_or_error()
     if isinstance(client, str):
         return client
+    # Auto-derive pkey field name if only ctype was given (ns.Type -> ns.Type.type)
+    parts = field.split(".")
+    if len(parts) == 2:
+        ns, type_name = parts
+        pkey_name = _camel_to_snake(type_name)
+        field = f"{ns}.{type_name}.{pkey_name}"
     fconst_key = f"{field}/{value}"
     line = f'dmmeta.fconst  fconst:{fconst_key}  value:"{value}"  comment:"{comment}"'
     result = client.acr_insert(line)
     if result.ok:
         return _json({"ok": True, "fconst": fconst_key})
     return _json({"ok": False, "error": result.stderr.strip()})
+
+
+@server.tool()
+def create_enum(
+    namespace: str,
+    name: str,
+    values: list[str],
+    comment: str = "",
+    subset: str = "algo.Smallstr50",
+) -> str:
+    """Create an enum type with all its constants in one call.
+
+    This is a high-level convenience tool that combines ``create_ctype`` (with
+    ``-subset``) and multiple ``create_fconst`` calls.  It creates the ctype,
+    then adds one fconst for each value.
+
+    Args:
+        namespace: Target namespace (e.g., "mydb")
+        name: CamelCase enum type name (e.g., "Status", "Priority")
+        values: List of enum constant names (e.g., ["pending", "active", "done"])
+        comment: Description of the enum type
+        subset: Underlying string type for the pkey (default: "algo.Smallstr50")
+
+    Returns:
+        JSON with the created ctype, fconst list, and any errors.
+    """
+    client = _client_or_error()
+    if isinstance(client, str):
+        return client
+
+    ctype_name = f"{namespace}.{name}"
+    pkey_name = _camel_to_snake(name)
+    field_name = f"{ctype_name}.{pkey_name}"
+
+    # Step 1: create the ctype with -subset
+    args = ["-ctype", ctype_name, "-subset", subset]
+    if comment:
+        args.extend(["-comment", comment])
+    result = client.acr_ed_create(args)
+    if not result.ok:
+        return _json({"ok": False, "error": result.stderr.strip(), "step": "create_ctype"})
+
+    # Step 2: add fconst for each value
+    created: list[str] = []
+    errors: list[dict] = []
+    for val in values:
+        fconst_key = f"{field_name}/{val}"
+        line = f'dmmeta.fconst  fconst:{fconst_key}  value:"{val}"  comment:""'
+        r = client.acr_insert(line)
+        if r.ok:
+            created.append(fconst_key)
+        else:
+            errors.append({"value": val, "error": r.stderr.strip()})
+
+    return _json({
+        "ok": len(errors) == 0,
+        "ctype": ctype_name,
+        "pkey_field": field_name,
+        "fconsts_created": created,
+        "errors": errors,
+    })
 
 
 @server.tool()
@@ -856,9 +942,26 @@ def create_bitfield(
     client = _client_or_error()
     if isinstance(client, str):
         return client
-    # Insert a bitfld record via acr since acr_ed may not support all bitfield options
+
     field_name = f"{ctype}.{name}"
-    # First create the field with Bitfld reftype
+
+    # Auto-calculate offset: query existing bitfields on this srcfield and
+    # place the new one right after the last occupied bit.
+    offset = 0
+    existing = client.acr(f"dmmeta.bitfld:{ctype}.%")
+    if existing.ok and existing.records:
+        for rec in existing.records:
+            if rec.get("srcfield") == srcfield:
+                try:
+                    rec_offset = int(rec.get("offset", "0"))
+                    rec_width = int(rec.get("width", "0"))
+                    end = rec_offset + rec_width
+                    if end > offset:
+                        offset = end
+                except (ValueError, TypeError):
+                    pass
+
+    # Create the field with Bitfld reftype
     args = [
         "-field", field_name,
         "-arg", arg,
@@ -870,14 +973,15 @@ def create_bitfield(
     result = client.acr_ed_create(args)
     if not result.ok:
         return _json(result.to_dict())
-    # Insert the bitfld width record
+
+    # Update the bitfld record with the computed offset and width
     bitfld_line = (
         f"dmmeta.bitfld  field:{field_name}"
-        f"  offset:0  width:{width}  srcfield:{srcfield}"
+        f"  offset:{offset}  width:{width}  srcfield:{srcfield}"
         f'  comment:"{comment}"'
     )
-    bfresult = client.acr_insert(bitfld_line)
-    return _json({"ok": result.ok, "field": field_name, "width": width})
+    client.acr_merge(bitfld_line)
+    return _json({"ok": True, "field": field_name, "offset": offset, "width": width})
 
 
 @server.tool()
