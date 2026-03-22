@@ -214,9 +214,25 @@ class AcrClient:
     # -- acr_ed operations -------------------------------------------------
 
     def acr_ed_create(self, args: list[str]) -> AcrResult:
-        """Run ``acr_ed -create <args> -write``."""
+        """Run ``acr_ed -create <args> -write``.
+
+        acr_ed -create -write succeeds by inserting records then running amc.
+        If amc reports 'no_output' or 'need_ssimfile' the return code may be
+        non-zero even though the records were created.  We treat these as
+        success with warnings.
+        """
         cmd = ["acr_ed", "-create"] + args + ["-write"]
-        return self._run(cmd, timeout=60)
+        result = self._run(cmd, timeout=60)
+        if not result.ok:
+            # Check if the records were actually created despite amc warnings
+            combined = result.stdout + result.stderr
+            amc_warnings = ("amc.no_output", "amc.need_ssimfile", "amc.back_pack",
+                            "amc.empty_typefld")
+            if any(w in combined for w in amc_warnings) and "acr.insert" in result.stdout:
+                # Records were created — treat as success with amc warning
+                result.ok = True
+                result.records = parse_ssim_output(result.stdout)
+        return result
 
     def acr_ed_create_target(self, name: str, nstype: str, comment: str = "") -> AcrResult:
         """Run ``acr_ed -create -target <name> -nstype <type> -write``.

@@ -681,24 +681,37 @@ def create_ctype(
     nstype = client.get_ns_type(namespace)
     if nstype == "ssimdb":
         ssimfile_name = f"{namespace}.{_camel_to_snake(name)}"
+
+        # Ensure data directory exists for the ssim file
+        data_dir = client.work_dir / "data" / namespace
+        data_dir.mkdir(parents=True, exist_ok=True)
+        ssim_file_path = data_dir / f"{_camel_to_snake(name)}.ssim"
+        if not ssim_file_path.exists():
+            ssim_file_path.touch()
+
+        # Insert ssimfile record (may already exist if acr_ed created it)
         ssim_line = f"dmmeta.ssimfile  ssimfile:{ssimfile_name}  ctype:{ctype_name}"
         ssim_result = client.acr_insert(ssim_line)
-        if not ssim_result.ok:
+        # Ignore "already exists" errors
+        if not ssim_result.ok and "n_ignore:1" not in ssim_result.stdout:
             return _error(
                 f"ctype created but ssimfile insert failed: {ssim_result.stderr.strip()}",
                 ctype=ctype_name,
             )
+
         # Auto-insert cfmt so the type has ReadStrptrMaybe / Print (needed by finput)
         cfmt_line = (
             f'dmmeta.cfmt  cfmt:{ctype_name}.String  printfmt:Tuple'
             f'  read:Y  print:Y  sep:""  genop:Y  comment:""'
         )
         cfmt_result = client.acr_insert(cfmt_line)
-        if not cfmt_result.ok:
+        # Ignore "already exists" errors
+        if not cfmt_result.ok and "n_ignore:1" not in cfmt_result.stdout:
             return _error(
                 f"ctype created but cfmt insert failed: {cfmt_result.stderr.strip()}",
                 ctype=ctype_name,
             )
+
         # Re-run amc now that ssimfile + cfmt exist
         client.amc()
 
@@ -843,7 +856,10 @@ def create_enum(
         args.extend(["-comment", comment])
     result = client.acr_ed_create(args)
     if not result.ok:
-        return _json({"ok": False, "error": result.stderr.strip(), "step": "create_ctype"})
+        # Double-check: ctype may have been created despite amc warnings
+        verify = client.acr(f"dmmeta.ctype:{ctype_name}")
+        if not (verify.ok and verify.records):
+            return _json({"ok": False, "error": result.stderr.strip(), "step": "create_ctype"})
 
     # Step 2: add fconst for each value
     created: list[str] = []

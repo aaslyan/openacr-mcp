@@ -1345,6 +1345,8 @@ class TestCreateEnum:
         self.mock_client.acr_ed_create.return_value = AcrResult(
             ok=False, stderr="namespace not found", returncode=1,
         )
+        # Verify step should also fail (ctype doesn't exist)
+        self.mock_client.acr.return_value = AcrResult(ok=False, stderr="not found", returncode=1)
         result = json.loads(srv.create_enum("bad", "X", ["a"]))
         assert result["ok"] is False
         assert result["step"] == "create_ctype"
